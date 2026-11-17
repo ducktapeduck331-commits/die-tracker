@@ -1119,4 +1119,6 @@ document.getElementById('brand-die').innerHTML = die(5);
 applyTheme();
 ui.tab = hashTab();
 boot();
-if ('serviceWorker' in navigator && location.protocol !== 'file:') window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(() => {}); });
+if ('serviceWorker' in navigator && location.protocol !== 'file:') window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(r => { r.update().catch(() => {}); }).catch(() => {});
+  // when a new version takes over, reload once so the update shows right away (skipped on the very first install)
+  if (navigator.serviceWorker.controller) { let done = false; navigator.serviceWorker.addEventListener('controllerchange', () => { if (!done) { done = true; location.reload(); } }); } });

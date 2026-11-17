@@ -4,7 +4,7 @@
      falling back to the cache when offline or slow.
    - The Firebase SDK and Google Fonts are cached on first use (versioned, safe to keep).
    - Firebase API traffic (Firestore, Auth) is never touched: Firestore has its own offline cache. */
-const VERSION = 'beer-die-v6';
+const VERSION = 'beer-die-v7';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'firebase-config.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png'];
 const STATIC_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
@@ -20,7 +20,8 @@ async function networkFirst(req, fallbackUrl) {
   const cache = await caches.open(VERSION);
   try {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 4000);
-    const res = await fetch(req, { signal: ctl.signal });
+    // cache: 'no-cache' revalidates with the server, so GitHub Pages' 10-minute browser cache can't serve an old app.js
+    const res = await fetch(req.url, { signal: ctl.signal, cache: 'no-cache', credentials: 'same-origin' });
     clearTimeout(t);
     if (res && res.ok) cache.put(req, res.clone());
     return res;
