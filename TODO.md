@@ -27,11 +27,6 @@ How the app works (read before changing anything):
 - Store the season on each game (name or id plus start date). Games logged before seasons existed count
   as the first season.
 
-### 9. Streaks and head-to-head
-- Per player: current win streak and longest win streak (also loss streaks if easy).
-- Head-to-head: pick two players or two duos and see their record against each other, points for and against,
-  and their last few games.
-
 ### 10. Player profile pages
 - Tap a player's name anywhere to open their page: all their stats (offense and defense), win %, streaks,
   best partner (duo with the best record), toughest opponent, recent games, and charts.

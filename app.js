@@ -42,7 +42,7 @@ const S = { players: {}, games: {}, members: {}, member: null, league: null, use
   got: { players: false, games: false }, meta: { players: null, games: null }, syncErr: '', authErr: '', err: '' };
 const ui = { tab: 'game', pick: false, setupLive: 0, panel: null, tossTeam: null, thrower: null, confirmEnd: false, setup: null, setupOpen: false, lastId: null, watchId: null,
   sort: { k: 'w', dir: -1 }, open: null, confirmDel: null, rename: null, drafts: {}, menu: false, trend: null, chartSel: null,
-  league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false, exportOpen: false };
+  league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false, exportOpen: false, h2h: { mode: 'p', a: null, b: null, da: null, db: null } };
 let fb = null, db = null, authM = null, auth = null, unsubs = [], memberUnsub = null;
 
 function lsRead() { try { const d = JSON.parse(lsGet(LS) || 'null'); if (d && typeof d === 'object') return { players: d.players || {}, games: d.games || {} }; } catch (e) {} return { players: {}, games: {} }; }
@@ -531,7 +531,30 @@ function newSetup(from) {
 const MIX = [['pt', 'Points'], ['tink', 'Tinks'], ['sink', 'Sinks'], ['fg', 'Field goals'], ['fifa', 'FIFA plays']];
 function mixKey(e) { return e.fifa ? 'fifa' : e.kind === 'tink' ? 'tink' : e.kind === 'sink' ? 'sink' : e.kind === 'fg' ? 'fg' : 'pt'; }
 const newRow = id => ({ id: id, name: pname(id), g: 0, w: 0, toss: 0, pts: 0, tink: 0, sink: 0, fg: 0, ctch: 0, drop: 0, dr: { dropped: 0, twohand: 0, trapped: 0, bobble: 0 }, miss: 0, fifa: 0, ss: 0, red: 0, mix: { pt: 0, tink: 0, sink: 0, fg: 0, fifa: 0 }, trend: [] });
-const blankRow = id => Object.assign(newRow(id), { pct: 0, ppt: 0, ppg: 0, ch: 0, cpct: -1 }); // a player with no finished games
+const blankRow = id => Object.assign(newRow(id), { pct: 0, ppt: 0, ppg: 0, ch: 0, cpct: -1, stk: 0, lws: 0, lls: 0 }); // a player with no finished games
+/* Streaks from a player's finished games, oldest first. stk is the current run: +3 = won the last 3 (W3), -2 = lost the
+   last 2 (L2), 0 = no games. lws / lls are the longest win and loss runs ever. */
+function streaks(trend) {
+  let stk = 0, lws = 0, lls = 0;
+  trend.forEach(x => { stk = x.won ? (stk > 0 ? stk + 1 : 1) : (stk < 0 ? stk - 1 : -1); if (stk > lws) lws = stk; if (-stk > lls) lls = -stk; });
+  return { stk: stk, lws: lws, lls: lls };
+}
+const fstk = v => (v > 0 ? 'W' + v : v < 0 ? 'L' + (-v) : '');
+/* Head-to-head between two sides (each a list of player ids: one player each, or a duo each). A game counts as a meeting
+   when everyone on side X is on one team and everyone on side Y is on the other. For two single players it also counts
+   the games they played as partners. Newest first. */
+function h2h(X, Y) {
+  const r = { g: 0, wx: 0, wy: 0, px: 0, py: 0, meets: [], tg: 0, tw: 0 };
+  const side = (g, ids) => (ids.every(id => g.teamA.indexOf(id) >= 0) ? 'A' : ids.every(id => g.teamB.indexOf(id) >= 0) ? 'B' : null);
+  finals().forEach(g => {
+    const tx = side(g, X), ty = side(g, Y); if (!tx || !ty) return;
+    if (tx === ty) { r.tg++; if (g.winner === tx) r.tw++; return; }
+    const c = calc(g); r.g++; if (g.winner === tx) r.wx++; else if (g.winner === ty) r.wy++;
+    r.px += c.sc[tx]; r.py += c.sc[ty];
+    r.meets.push({ id: g.id, at: g.endedAt || 0, sx: c.sc[tx], sy: c.sc[ty], won: g.winner === tx ? 'x' : g.winner === ty ? 'y' : null, tx: tname(g, tx), ty: tname(g, ty) });
+  });
+  return r;
+}
 function computeStats() {
   const P = {}, D = {}, fs = finals(), tot = { g: fs.length, toss: 0, sink: 0, pts: 0 };
   const rec = { sinks: null, pts: null, comeback: null, long: null };
@@ -541,7 +564,8 @@ function computeStats() {
     ['A', 'B'].forEach(t => {
       g['team' + t].forEach(id => { const p = en(id); p.g++; if (g.winner === t) p.w++; per[id] = { pts: 0, sink: 0, t: t }; });
       const key = g['team' + t].slice().sort().join('|'), d = D[key] || (D[key] = { ids: g['team' + t].slice().sort(), g: 0, w: 0, pf: 0, pa: 0, cb: 0 });
-      d.g++; if (g.winner === t) { d.w++; if (c.used[t] > 0) d.cb++; } // comeback: won after having to redeem d.pf += c.sc[t]; d.pa += c.sc[opp(t)];
+      d.g++; if (g.winner === t) { d.w++; if (c.used[t] > 0) d.cb++; } // comeback: won after having to redeem
+      d.pf += c.sc[t]; d.pa += c.sc[opp(t)];
     });
     g.events.forEach((e, i) => {
       if (e.kind === 'retoss') return;
@@ -559,21 +583,21 @@ function computeStats() {
       else if (e.kind === 'fifaCatch' && e.defender) en(e.defender).fifa++;
     });
     Object.keys(per).forEach(id => {
-      if (per[id].t) en(id).trend.push({ at: g.endedAt || 0, pts: per[id].pts, won: g.winner === per[id].t, vs: tname(g, opp(per[id].t)), fs: c.sc[per[id].t] + '–' + c.sc[opp(per[id].t)] });
+      if (per[id].t) en(id).trend.push({ at: g.endedAt || 0, pts: per[id].pts, won: g.winner === per[id].t, gid: g.id, vs: tname(g, opp(per[id].t)), fs: c.sc[per[id].t] + '–' + c.sc[opp(per[id].t)] });
       if (per[id].sink && (!rec.sinks || per[id].sink > rec.sinks.v)) rec.sinks = { v: per[id].sink, who: pname(id), g: g };
       if (per[id].pts && (!rec.pts || per[id].pts > rec.pts.v)) rec.pts = { v: per[id].pts, who: pname(id), g: g };
     });
     if (g.winner && c.maxDef[g.winner] > 0 && (!rec.comeback || c.maxDef[g.winner] > rec.comeback.v)) rec.comeback = { v: c.maxDef[g.winner], who: tname(g, g.winner), g: g };
     if (!rec.long || c.tosses > rec.long.v) rec.long = { v: c.tosses, who: tname(g, 'A') + ' vs ' + tname(g, 'B'), g: g };
   });
-  const rows = Object.keys(P).map(id => { const p = P[id]; p.pct = p.g ? p.w / p.g : 0; p.ppt = p.toss ? p.pts / p.toss : 0; p.ppg = p.g ? p.pts / p.g : 0; p.ch = p.ctch + p.drop; p.cpct = p.ch ? p.ctch / p.ch : -1; p.trend.sort((a, b) => a.at - b.at); return p; });
+  const rows = Object.keys(P).map(id => { const p = P[id]; p.pct = p.g ? p.w / p.g : 0; p.ppt = p.toss ? p.pts / p.toss : 0; p.ppg = p.g ? p.pts / p.g : 0; p.ch = p.ctch + p.drop; p.cpct = p.ch ? p.ctch / p.ch : -1; p.trend.sort((a, b) => a.at - b.at); Object.assign(p, streaks(p.trend)); return p; });
   const duos = Object.keys(D).map(k => { const d = D[k]; d.pct = d.w / d.g; return d; }).sort((a, b) => b.pct - a.pct || b.w - a.w || (b.pf - b.pa) - (a.pf - a.pa));
   return { rows: rows, duos: duos, rec: rec, tot: tot };
 }
-const COLS = [['name', 'Player', 'Player'], ['g', 'GP', 'Games played'], ['w', 'W', 'Wins'], ['pct', 'Win%', 'Win percentage'], ['toss', 'Toss', 'Tosses'], ['pts', 'Pts', 'Points scored'],
+const COLS = [['name', 'Player', 'Player'], ['g', 'GP', 'Games played'], ['w', 'W', 'Wins'], ['pct', 'Win%', 'Win percentage'], ['stk', 'Strk', 'Current streak: wins in a row (W) or losses in a row (L)'], ['lws', 'Best W', 'Longest win streak'], ['toss', 'Toss', 'Tosses'], ['pts', 'Pts', 'Points scored'],
   ['ppt', 'P/Toss', 'Points per toss'], ['ppg', 'P/Game', 'Points per game'], ['tink', 'Tink', 'Tinks'], ['sink', 'Sink', 'Sinks'], ['fg', 'FG', 'Field goals'], ['ctch', 'Catch', 'One-hand catches'], ['drop', 'Drops', 'Drops: points scored on this defender'], ['cpct', 'Catch%', 'Catch percentage: catches out of catches plus drops'],
   ['miss', 'Shrt/Low', 'Short and too-low tosses'], ['fifa', 'FIFA', 'FIFA catches'], ['ss', 'Self', 'Self-sinks'], ['red', 'Rdm', 'Redemptions: redemption tosses that scored']];
-function fmt(k, v) { return k === 'cpct' ? (v < 0 ? '&mdash;' : Math.round(v * 100) + '%') : k === 'pct' ? Math.round(v * 100) + '%' : k === 'ppt' ? v.toFixed(2) : k === 'ppg' ? v.toFixed(1) : k === 'name' ? esc(v) : String(v); }
+function fmt(k, v) { return k === 'stk' ? (fstk(v) || '&mdash;') : k === 'cpct' ? (v < 0 ? '&mdash;' : Math.round(v * 100) + '%') : k === 'pct' ? Math.round(v * 100) + '%' : k === 'ppt' ? v.toFixed(2) : k === 'ppg' ? v.toFixed(1) : k === 'name' ? esc(v) : String(v); }
 function fdate(t) { if (!t) return ''; try { return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (e) { return ''; } }
 
 /* ---------- export: spreadsheets + full backup (admins; anyone in local mode) ---------- */
@@ -594,7 +618,7 @@ const exportName = (what, ext) => 'beer-die-' + exportCode() + '-' + ymd(Date.no
 const pct1 = v => Math.round(v * 1000) / 10;
 /* One row per player (players with no finished game get zeros), every column of the Stats table plus the drop reasons. */
 const XCOLS = [['Player', r => r.name], ['Account', r => (S.mode !== 'cloud' ? '' : S.players[r.id] && S.players[r.id].uid ? 'linked' : 'guest')],
-  ['Games', r => r.g], ['Wins', r => r.w], ['Losses', r => r.g - r.w], ['Win %', r => pct1(r.pct)], ['Tosses', r => r.toss], ['Points', r => r.pts],
+  ['Games', r => r.g], ['Wins', r => r.w], ['Losses', r => r.g - r.w], ['Win %', r => pct1(r.pct)], ['Current streak', r => fstk(r.stk)], ['Longest win streak', r => r.lws], ['Longest loss streak', r => r.lls], ['Tosses', r => r.toss], ['Points', r => r.pts],
   ['Points per toss', r => Math.round(r.ppt * 1000) / 1000], ['Points per game', r => Math.round(r.ppg * 100) / 100], ['Tinks', r => r.tink], ['Sinks', r => r.sink], ['Field goals', r => r.fg],
   ['Catches', r => r.ctch], ['Drops', r => r.drop], ['Catch %', r => (r.ch ? pct1(r.cpct) : '')], ['Short / too low', r => r.miss], ['FIFA catches', r => r.fifa], ['Self-sinks', r => r.ss], ['Redemptions', r => r.red],
   ['Drops: dropped', r => r.dr.dropped], ['Drops: two-handed', r => r.dr.twohand], ['Drops: trapped', r => r.dr.trapped], ['Drops: bobble', r => r.dr.bobble], ['Player id', r => r.id]];
@@ -915,8 +939,50 @@ function myStatsView(s) { // the signed-in person's own numbers, top of the Stat
   const rank = s.rows.slice().sort((a, b) => b.w - a.w || b.pct - a.pct || b.pts - a.pts).map(x => x.id).indexOf(pid) + 1;
   const c = (k, v) => '<div class="ms"><div class="v num">' + v + '</div><div class="k">' + k + '</div></div>';
   return '<section class="card stack mine" id="my-stats">' + head + '<div class="mystats">' + c('Record', r.w + '&ndash;' + (r.g - r.w)) + c('Win%', Math.round(r.pct * 100) + '%') + c('Points', r.pts) + c('Pts / toss', r.ppt.toFixed(2)) +
-    c('Sinks', r.sink) + c('Tinks', r.tink) + c('Wins rank', '#' + rank) + c('Catches', r.ctch) + c('Drops', r.drop) + c('Catch %', fmt('cpct', r.cpct)) + '</div>' +
+    c('Streak', fstk(r.stk) || '&mdash;') + c('Best W streak', r.lws) + c('Sinks', r.sink) + c('Tinks', r.tink) + c('Wins rank', '#' + rank) + c('Catches', r.ctch) + c('Drops', r.drop) + c('Catch %', fmt('cpct', r.cpct)) + '</div>' +
     '<p class="small muted num">' + r.g + ' game' + (r.g === 1 ? '' : 's') + ' &middot; ' + r.toss + ' tosses &middot; ' + r.ppg.toFixed(1) + ' points per game</p></section>';
+}
+/* Head-to-head card on Stats: two players (or two duos), picked with selects whose values are the stable ids. */
+function h2hView(s) {
+  const H = ui.h2h, ps = s.rows.filter(r => r.g).sort((a, b) => a.name.localeCompare(b.name) || (a.id < b.id ? -1 : 1));
+  if (ps.length < 2) return '';
+  const dkey = d => d.ids.join('|'), dname = d => d.ids.map(pname).join(' & ');
+  const ds = s.duos.slice().sort((a, b) => dname(a).localeCompare(dname(b)) || (dkey(a) < dkey(b) ? -1 : 1));
+  const apart = (a, b) => !a.ids.some(id => b.ids.indexOf(id) >= 0);
+  const canDuo = ds.some(a => ds.some(b => apart(a, b)));
+  const duo = H.mode === 'd' && canDuo;
+  let X, Y, nx, ny, optA, optB, va, vb;
+  const opts = (list, val, key, name) => list.map(o => '<option value="' + esc(key(o)) + '"' + (key(o) === val ? ' selected' : '') + '>' + esc(name(o)) + '</option>').join('');
+  if (duo) {
+    const as = ds.filter(a => ds.some(b => apart(a, b)));
+    const a = as.filter(d => dkey(d) === H.da)[0] || as.slice().sort((p, q) => q.g - p.g)[0], bs = ds.filter(d => apart(a, d));
+    const b = bs.filter(d => dkey(d) === H.db)[0] || bs.slice().sort((p, q) => h2h(a.ids, q.ids).g - h2h(a.ids, p.ids).g || q.g - p.g)[0];
+    X = a.ids; Y = b.ids; nx = dname(a); ny = dname(b); va = dkey(a); vb = dkey(b);
+    optA = opts(as, va, dkey, dname); optB = opts(bs, vb, dkey, dname);
+  } else {
+    const mine = myPlayerId(), a = ps.filter(r => r.id === H.a)[0] || ps.filter(r => r.id === mine)[0] || ps.slice().sort((p, q) => q.w - p.w || q.g - p.g)[0], bs = ps.filter(r => r.id !== a.id);
+    const b = bs.filter(r => r.id === H.b)[0] || bs.slice().sort((p, q) => h2h([a.id], [q.id]).g - h2h([a.id], [p.id]).g || q.g - p.g)[0];
+    X = [a.id]; Y = [b.id]; nx = a.name; ny = b.name; va = a.id; vb = b.id;
+    optA = opts(ps, va, r => r.id, r => r.name); optB = opts(bs, vb, r => r.id, r => r.name);
+  }
+  const r = h2h(X, Y), what = duo ? 'duo' : 'player', pl = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  let h = '<section class="card stack" id="h2h"><h3 class="tape">Head-to-head</h3>' +
+    (canDuo ? '<div class="seg"><button type="button" class="btn sm" id="h2h-mode-p" data-act="h2hmode" data-v="p" aria-pressed="' + (duo ? 'false' : 'true') + '">Players</button><button type="button" class="btn sm" id="h2h-mode-d" data-act="h2hmode" data-v="d" aria-pressed="' + (duo ? 'true' : 'false') + '">Duos</button></div>' : '') +
+    '<div class="h2h-pick"><select id="h2h-a" data-sel="' + (duo ? 'da' : 'a') + '" aria-label="First ' + what + '">' + optA + '</select><span class="vs" aria-hidden="true">vs</span>' +
+    '<select id="h2h-b" data-sel="' + (duo ? 'db' : 'b') + '" aria-label="Second ' + what + '">' + optB + '</select></div>';
+  if (!r.g) h += '<p class="small muted" id="h2h-none">' + esc(nx) + ' and ' + esc(ny) + ' haven\'t played against each other yet.</p>';
+  else {
+    const df = r.px - r.py;
+    h += '<div class="h2h-score" role="group" aria-label="Record: ' + esc(nx) + ' ' + r.wx + ', ' + esc(ny) + ' ' + r.wy + '"><div class="hs' + (r.wx > r.wy ? ' lead' : '') + '"><div class="v num" id="h2h-wa">' + r.wx + '</div><div class="k">' + esc(nx) + '</div></div>' +
+      '<div class="hm num" id="h2h-games">' + pl(r.g, 'game') + '</div>' +
+      '<div class="hs' + (r.wy > r.wx ? ' lead' : '') + '"><div class="v num" id="h2h-wb">' + r.wy + '</div><div class="k">' + esc(ny) + '</div></div></div>' +
+      '<p class="small num" id="h2h-pts"><b>Points in these games:</b> ' + esc(nx) + (duo ? '' : '\'s teams') + ' ' + r.px + ', ' + esc(ny) + (duo ? '' : '\'s teams') + ' ' + r.py + ' <span class="muted">(' + (df > 0 ? '+' : df < 0 ? '&minus;' : '') + Math.abs(df) + ' for ' + esc(nx) + ')</span></p>';
+  }
+  if (!duo) h += '<p class="small num" id="h2h-together"><b>As partners:</b> ' + (r.tg ? pl(r.tg, 'game') + ', ' + r.tw + '&ndash;' + (r.tg - r.tw) + ' <span class="muted">(' + Math.round(r.tw / r.tg * 100) + '% won)</span>' : 'never teamed up') + '</p>';
+  if (r.g) h += '<h3 class="tape">Last ' + (r.g === 1 ? 'meeting' : Math.min(5, r.g) + ' meetings') + '</h3><ol class="meets" id="h2h-meets">' + r.meets.slice(0, 5).map(m =>
+    '<li><span class="md num">' + esc(fdate(m.at)) + '</span><span class="mt"><span' + (m.won === 'x' ? ' class="w"' : '') + '>' + esc(m.tx) + '</span> <b class="num">' + m.sx + '&ndash;' + m.sy + '</b> <span' + (m.won === 'y' ? ' class="w"' : '') + '>' + esc(m.ty) + '</span></span>' +
+    '<span class="mw">' + (m.won ? esc(m.won === 'x' ? nx : ny) + ' won' : '') + '</span></li>').join('') + '</ol>';
+  return h + '</section>';
 }
 function statsView() {
   const s = computeStats(); let h = myStatsView(s) + '<h2>Leaderboard</h2>';
@@ -934,12 +1000,13 @@ function statsView() {
   }
   h += '<section class="card stack"><h3 class="tape">How they score</h3>' + mixChart(s.rows) + '</section>';
   h += defenseView(s.rows);
+  h += h2hView(s);
   const k = ui.sort.k, dir = ui.sort.dir;
   s.rows.sort((a, b) => { const d = k === 'name' ? a.name.localeCompare(b.name) : a[k] - b[k]; return d * dir || b.w - a.w || a.name.localeCompare(b.name); });
   h += '<section class="stack"><h3 class="tape">Players &middot; tap a column to sort</h3><div class="scroll"><table><thead><tr>' + COLS.map(c =>
     '<th scope="col"' + (k === c[0] ? ' aria-sort="' + (dir < 0 ? 'descending' : 'ascending') + '"' : '') + '><button type="button" id="sort-' + c[0] + '" data-act="sort" data-v="' + c[0] + '" title="' + c[2] + '" aria-label="Sort by ' + c[2] + '">' + c[1] + '</button></th>').join('') +
     '</tr></thead><tbody>' + s.rows.map(r => '<tr>' + COLS.map(c => '<td' + (k === c[0] ? ' class="hi"' : '') + '>' + (c[0] === 'name' ? pmark(r.id) : '') + fmt(c[0], r[c[0]]) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' +
-    '<p class="small onwood">Finished games only. Points count what a player scored on their own tosses (a redemption shot counts in full). Rdm = redemption tosses that scored. Drops = points scored on a player; Catch% = catches out of catches + drops (points logged without a defender are ignored).</p></section>';
+    '<p class="small onwood">Finished games only. Points count what a player scored on their own tosses (a redemption shot counts in full). Strk = current streak (W3 = won the last 3, L2 = lost the last 2); Best W = longest win streak. Rdm = redemption tosses that scored. Drops = points scored on a player; Catch% = catches out of catches + drops (points logged without a defender are ignored).</p></section>';
   h += '<section class="stack"><h3 class="tape">Best duos</h3><div class="scroll"><table><thead><tr><th scope="col"><button type="button" disabled>Duo</button></th><th scope="col"><button type="button" disabled>W&ndash;L</button></th><th scope="col"><button type="button" disabled>Win%</button></th><th scope="col"><button type="button" disabled>Pt diff</button></th><th scope="col"><button type="button" disabled title="Comebacks: games won after having to redeem">Cmbk</button></th></tr></thead><tbody>' +
     s.duos.slice(0, 10).map(d => { const df = d.pf - d.pa; return '<tr><td style="max-width:190px">' + esc(d.ids.map(pname).join(' & ')) + '</td><td>' + d.w + '&ndash;' + (d.g - d.w) + '</td><td>' + Math.round(d.pct * 100) + '%</td><td>' + (df > 0 ? '+' : '') + df + '</td><td>' + d.cb + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
   const r = s.rec, rl = (k2, x, unit) => (x ? tile(k2, x.v + ' ' + unit, esc(x.who) + ' &middot; ' + fdate(x.g.endedAt)) : '');
@@ -1226,6 +1293,7 @@ const ACT = {
     put('games', id, ng);
     window.scrollTo(0, 0); },
   sort: v => { if (ui.sort.k === v) ui.sort.dir = -ui.sort.dir; else ui.sort = { k: v, dir: v === 'name' ? 1 : -1 }; render(); },
+  h2hmode: v => { ui.h2h.mode = v === 'd' ? 'd' : 'p'; render(); },
   trend: v => { ui.trend = v; ui.chartSel = null; render(); },
   pt: v => { ui.chartSel = Number(v); render(); },
   open: v => { ui.open = ui.open === v ? null : v; ui.confirmDel = null; render(); },
@@ -1283,6 +1351,7 @@ document.addEventListener('keydown', e => {
 // a Google profile photo that fails to load is dropped, leaving the initial underneath
 document.addEventListener('error', e => { const t = e.target; if (t && t.tagName === 'IMG' && t.parentNode && t.parentNode.classList && t.parentNode.classList.contains('av')) t.remove(); }, true);
 document.addEventListener('input', e => { if (e.target.id && e.target.tagName === 'INPUT') ui.drafts[e.target.id] = e.target.value; });
+document.addEventListener('change', e => { const t = e.target; if (t && t.tagName === 'SELECT' && t.dataset.sel && t.dataset.sel in ui.h2h) { ui.h2h[t.dataset.sel] = t.value; render(); } });
 document.addEventListener('submit', e => {
   const f = e.target, k = f.dataset && f.dataset.form; if (!k) return; e.preventDefault();
   if (k === 'quickadd') addPlayer('quick-player-name');

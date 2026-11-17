@@ -42,6 +42,11 @@ Under **House rules** on the new-game screen the win rule can be switched to **W
 Games played before this rule existed keep the rule they were played with, so history and stats don't change.
 Stats add **Rdm** (a player's redemption tosses that scored) and **Cmbk** (a duo's wins in games where it had to redeem).
 
+### Streaks and head-to-head
+- The player table and **My stats** show the current streak (**W3** = won the last 3, **L2** = lost the last 2) and the longest win streak.
+- The **Head-to-head** card on Stats compares two players (record against each other, their record as partners, points in
+  those games, last 5 meetings) or two duos.
+
 ### Export and backups
 The free Firebase plan keeps no backups. Owners and admins (anyone, without Firebase) can open the menu and use
 **Export stats** to download `players.csv` (every stat per player), `games.csv` (one row per finished game) and a full
