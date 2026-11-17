@@ -2,7 +2,7 @@
 
 A scorekeeper and stat tracker for 2 v 2 Beer Die, built for the chapter as an installable web app (PWA).
 Log every toss (Point, Tink!, Sink!, field goals, catches, FIFAs), and it keeps the score,
-enforces the house rules (to 12, win by 2, no winning on a FIFA, self-sink loses) and builds
+enforces the house rules (to 12 with redemption, no winning on a FIFA, self-sink loses) and builds
 a leaderboard, charts, duo records and game history.
 
 It is a plain static site: no build step, no server. Open `index.html` from any web host.
@@ -14,6 +14,28 @@ It is a plain static site: no build step, no server. Open `index.html` from any 
   can still play as **guests**; any member can log a whole game for all four players from one phone.
 - **Works with bad signal.** Tosses are saved on the phone first and sync when the connection is back.
 - **Without Firebase** it still works, but with no sign-in and stats stay on that one device (a banner says so).
+
+## House rule: Redemption
+
+Reaching the target (12 by default) does not end the game. The **other** team gets a **redemption round**:
+
+- **2 tosses, one by each player.** The app picks the thrower (teammate 1, then teammate 2); you can swap the order,
+  but nobody throws twice. Both tosses are always taken, even if the first one works. A re-toss doesn't use one up.
+- **A redemption shot knocks the leader down first**, but never below target − 1 (11). Points left over are added to the
+  redeeming team. With a target of 12: `12-9` + point → `11-9`, then another point → `11-10`. `14-9` + sink → `11-9`.
+  `14-9` + point → `13-9`. `12-11` + sink → `11-13`.
+- **After the two tosses:** if the leader is still at 12 or more, the leader wins. Otherwise play continues and the
+  leader tosses next. If the leftover points put the redeeming team at 12 or more, the roles flip and the old leader
+  gets a redemption round against them.
+- **3 redemption rounds per team, per game.** If a team reaches the target and the other side has none left, it wins on the spot.
+- **No FIFA in redemption**: the FIFA button is hidden for those two tosses. Everything else works as usual
+  (a self-sink is still an automatic loss if that rule is on).
+- **FIFA points and the target:** you still can't win on a FIFA. A FIFA point handed to the defending team neither wins
+  the game nor starts a redemption round; that team has to score a normal point at or past the target to trigger it.
+
+Under **House rules** on the new-game screen the win rule can be switched to **Win by 2** or **First to target** instead.
+Games played before this rule existed keep the rule they were played with, so history and stats don't change.
+Stats add **Rdm** (a player's redemption tosses that scored) and **Cmbk** (a duo's wins in games where it had to redeem).
 
 ## 1. Set up Firebase (free tier is plenty)
 
@@ -91,5 +113,5 @@ then open <http://localhost:8000>. (Service workers need `http://localhost` or H
 | `firestore.rules` | Security rules (membership, roles) to paste into the Firebase console |
 | `manifest.webmanifest`, `sw.js`, `icons/` | PWA install and offline support |
 
-When you change the app after deploying, bump `VERSION` in `sw.js` (currently `beer-die-v2`) so old caches are cleared
+When you change the app after deploying, bump `VERSION` in `sw.js` (currently `beer-die-v4`) so old caches are cleared
 and phones pick up the new files.

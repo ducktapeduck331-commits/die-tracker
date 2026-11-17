@@ -3,14 +3,20 @@
    members/{uid} {uid, name, photoURL, email, status: pending|approved, role: owner|admin|member, playerId?, requestedAt, approvedAt};
    players/{id} {name, createdAt, uid?} (uid = the Google account the player is linked to; none = guest);
    games/{id} {teamA, teamB, settings, events[], status, winner, firstToss, startedAt, endedAt, score?, called?, loggedBy}.
-   Score is always derived by replaying events. Sign-in is Google only; without a Firebase config it runs local-only. */
+   settings {target, winRule: redemption|winBy2|first, winBy2 (legacy mirror of winRule), tinks, fieldGoals, fifa, selfSinkLoss}.
+   Score, winner, whose toss and the redemption state are always derived by replaying events (see calc). Sign-in is Google only; without a Firebase config it runs local-only. */
 import { firebaseConfig, configured } from './firebase-config.js';
 
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const opp = t => (t === 'A' ? 'B' : 'A');
-const DEF = { target: 12, winBy2: true, tinks: true, fieldGoals: true, fifa: 'off', selfSinkLoss: true };
+const DEF = { target: 12, winRule: 'redemption', winBy2: false, tinks: true, fieldGoals: true, fifa: 'off', selfSinkLoss: true };
+const RULES = [['redemption', 'Redemption'], ['winBy2', 'Win by 2'], ['first', 'First to target']];
+const MAX_RED = 3; // redemption rounds each team may use per game
+/* Games saved before winRule existed only have winBy2 (and the default back then was true), so they replay exactly as they were played. */
+const ruleOf = raw => (raw && RULES.some(r => r[0] === raw.winRule) ? raw.winRule : raw && raw.winBy2 === false ? 'first' : 'winBy2');
+const ruleText = st => 'First to ' + st.target + (st.winRule === 'redemption' ? ' \u00b7 Redemption' : st.winRule === 'winBy2' ? ' \u00b7 Win by 2' : '');
 const PIPS = { 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
 function die(n, cls) {
   let h = '';
@@ -370,7 +376,10 @@ function whoView() {
 
 /* ---------- game logic ---------- */
 const pname = id => (S.players[id] ? S.players[id].name : 'Unknown');
-function norm(id, g) { return Object.assign({}, g, { id: id, teamA: g.teamA || [], teamB: g.teamB || [], events: g.events || [], settings: Object.assign({}, DEF, g.settings || {}) }); }
+function norm(id, g) {
+  const st = Object.assign({}, DEF, g.settings || {}); st.winRule = ruleOf(g.settings); st.winBy2 = st.winRule === 'winBy2';
+  return Object.assign({}, g, { id: id, teamA: g.teamA || [], teamB: g.teamB || [], events: g.events || [], settings: st });
+}
 function games() { return Object.keys(S.games).map(id => norm(id, S.games[id])).filter(g => g.teamA.length === 2 && g.teamB.length === 2); }
 function liveGame() { return games().filter(g => g.status === 'live').sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))[0] || null; }
 function finals() { return games().filter(g => g.status === 'final').sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0)); }
@@ -380,22 +389,60 @@ const canDelete = g => S.mode === 'local' || isAdmin() || (!!g.loggedBy && g.log
 function saveGame(g) { const d = Object.assign({}, g); delete d.id; put('games', g.id, d); }
 function isFifaTeamPoint(e) { return !!(e.fifa && e.scoreTeam && e.scoreTeam !== e.team); }
 function met(sc, t, st) { return sc[t] >= st.target && (!st.winBy2 || sc[t] - sc[opp(t)] >= 2); }
+/* Replays the toss log. Everything about a game's state comes out of here, so undo is just "drop the last event".
+   Redemption rule (settings.winRule === 'redemption'):
+   - When a team scores and is at or past the target, the game does not end. The other team gets a redemption round of
+     2 tosses (one per player). Each team may use MAX_RED rounds per game; if it has none left, the scorer wins on the spot.
+   - A redemption shot's points first knock the leader down, but never below target-1; whatever is left over is added to
+     the redeeming team. Both tosses are always taken. A re-toss doesn't use one up; a self-sink keeps its normal effect.
+   - After the 2 tosses: leader still at the target -> leader wins. Otherwise play goes on (the leader tosses next, which
+     falls out of the normal alternation). If the leftover points carried the redeeming team to the target, the old leader
+     gets a redemption round against them, or loses on the spot if it has used all of its rounds.
+   - FIFA: no FIFA plays during redemption. Outside it, the existing "can't win on a FIFA" rule is kept as is: a FIFA
+     point given to the defending team neither wins nor starts a redemption round. That team sits at the target ("hold")
+     until it scores a non-FIFA point, and that score is what triggers the round (or the win).
+   Events carry redemption/knock/add for display, but the replay recomputes them, so it never depends on those fields. */
 function calc(g) {
-  const st = g.settings, sc = { A: 0, B: 0 }, fp = { A: 0, B: 0 }, maxDef = { A: 0, B: 0 };
-  let winner = null, n = 0;
+  const st = g.settings, T = st.target, redRule = st.winRule === 'redemption';
+  const sc = { A: 0, B: 0 }, fp = { A: 0, B: 0 }, maxDef = { A: 0, B: 0 }, used = { A: 0, B: 0 }, steps = [];
+  let winner = null, n = 0, red = null, survived = false;
+  const startRed = (team, leader) => { used[team]++; red = { team: team, leader: leader, n: 0, thrown: [], added: 0 }; };
   for (let i = 0; i < g.events.length && !winner; i++) {
-    const e = g.events[i], s = e.scoreTeam; if (e.kind !== 'retoss') n++;
-    if (s && e.points) { sc[s] += e.points; if (isFifaTeamPoint(e)) fp[s] += e.points; }
+    const e = g.events[i], s = e.scoreTeam, inRed = !!(red && e.team === red.team);
+    const step = { before: { A: sc.A, B: sc.B }, red: inRed, knock: 0, add: 0 }; steps.push(step);
+    if (e.kind !== 'retoss') n++;
+    if (s && e.points) {
+      if (inRed && s === red.team) {
+        step.knock = Math.min(e.points, Math.max(0, sc[red.leader] - (T - 1))); step.add = e.points - step.knock;
+        sc[red.leader] -= step.knock; sc[s] += step.add; red.added += step.add;
+      } else { sc[s] += e.points; if (isFifaTeamPoint(e)) fp[s] += e.points; }
+    }
+    step.after = { A: sc.A, B: sc.B };
     maxDef.A = Math.max(maxDef.A, sc.B - sc.A); maxDef.B = Math.max(maxDef.B, sc.A - sc.B);
     if (e.kind === 'selfSink' && st.selfSinkLoss) { winner = opp(e.team); break; }
-    if (s && e.points && !isFifaTeamPoint(e) && met(sc, s, st)) winner = s;
+    if (inRed) {
+      if (e.kind !== 'retoss') { red.n++; red.thrown.push(e.thrower); }
+      if (red.n >= 2) {
+        const L = red.leader, R = red.team, added = red.added; red = null;
+        if (sc[L] >= T) { winner = L; survived = true; }
+        else if (added > 0 && sc[R] >= T) { if (used[L] < MAX_RED) startRed(L, R); else winner = R; }
+      }
+    } else if (s && e.points && !isFifaTeamPoint(e)) {
+      if (redRule) { if (!red && sc[s] >= T) { if (used[opp(s)] < MAX_RED) startRed(opp(s), s); else winner = s; } }
+      else if (met(sc, s, st)) winner = s;
+    }
   }
-  let hold = null; if (!winner) ['A', 'B'].forEach(t => { if (met(sc, t, st)) hold = t; });
-  return { sc: sc, fp: fp, winner: winner, hold: hold, maxDef: maxDef, tosses: n };
+  let hold = null; if (!winner && !red) ['A', 'B'].forEach(t => { if (met(sc, t, st)) hold = t; });
+  return { sc: sc, fp: fp, winner: winner, hold: hold, maxDef: maxDef, tosses: n, red: red, used: used, steps: steps, survived: survived };
 }
 function tossInfo(g) {
   let team = g.firstToss || 'A'; const last = { A: null, B: null };
   g.events.forEach(e => { if (e.kind === 'retoss') return; last[e.team] = e.thrower; team = opp(e.team); });
+  const red = calc(g).red;
+  if (red) { // redemption: the redeeming team throws both, one toss per player; the order can be swapped but nobody throws twice
+    const rp = g['team' + red.team], free = rp.filter(id => red.thrown.indexOf(id) < 0);
+    return { team: red.team, thr: ui.thrower && free.indexOf(ui.thrower) >= 0 ? ui.thrower : free[0] || rp[0], red: red, free: free };
+  }
   if (ui.tossTeam) team = ui.tossTeam;
   const ps = g['team' + team]; let thr = last[team] === ps[0] ? ps[1] : ps[0];
   if (ui.thrower && ps.indexOf(ui.thrower) >= 0) thr = ui.thrower;
@@ -419,7 +466,12 @@ function pointsFor(kind, g, team) { // -> {points,to,fifa,capped}
 function logEvent(kind, extra) {
   const g = liveGame(); if (!g) return;
   const ti = tossInfo(g), pf = pointsFor(kind, g, ti.team);
+  if (ti.red && kind.indexOf('fifa') === 0) return; // no FIFA in redemption
   const ev = Object.assign({ t: Date.now(), kind: kind, thrower: ti.thr, team: ti.team, points: pf.points, scoreTeam: pf.to || null }, extra || {});
+  if (ti.red) { // points stays the shot's value; knock/add record how it was split (for the log; the replay recomputes it)
+    ev.redemption = true;
+    if (pf.points) { const over = Math.max(0, calc(g).sc[ti.red.leader] - (g.settings.target - 1)); ev.knock = Math.min(pf.points, over); ev.add = pf.points - ev.knock; }
+  }
   if (S.mode === 'cloud' && me()) ev.loggedBy = me();
   if (pf.fifa) ev.fifa = true; if (pf.capped) ev.capped = true;
   Object.keys(ev).forEach(k => { if (ev[k] === undefined || ev[k] === '') delete ev[k]; });
@@ -432,7 +484,10 @@ function logEvent(kind, extra) {
 }
 function newSetup(from) {
   const lastG = games().sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))[0];
-  const st = Object.assign({}, DEF, from ? from.settings : (lastG ? lastG.settings : {}));
+  const src = from || lastG, raw = src && S.games[src.id] ? S.games[src.id].settings : null;
+  const st = Object.assign({}, DEF, src ? src.settings : {});
+  if (!raw || !raw.winRule) st.winRule = DEF.winRule; // carrying house rules over from a pre-redemption game: redemption is the default now
+  st.winBy2 = st.winRule === 'winBy2';
   return { A: from ? from.teamA.slice() : [], B: from ? from.teamB.slice() : [], settings: st, firstToss: from && from.winner ? opp(from.winner) : 'A', caller: 'B', call: null, roll: null };
 }
 
@@ -442,17 +497,18 @@ function mixKey(e) { return e.fifa ? 'fifa' : e.kind === 'tink' ? 'tink' : e.kin
 function computeStats() {
   const P = {}, D = {}, fs = finals(), tot = { g: fs.length, toss: 0, sink: 0, pts: 0 };
   const rec = { sinks: null, pts: null, comeback: null, long: null };
-  const en = id => P[id] || (P[id] = { id: id, name: pname(id), g: 0, w: 0, toss: 0, pts: 0, tink: 0, sink: 0, fg: 0, ctch: 0, miss: 0, fifa: 0, ss: 0, mix: { pt: 0, tink: 0, sink: 0, fg: 0, fifa: 0 }, trend: [] });
+  const en = id => P[id] || (P[id] = { id: id, name: pname(id), g: 0, w: 0, toss: 0, pts: 0, tink: 0, sink: 0, fg: 0, ctch: 0, miss: 0, fifa: 0, ss: 0, red: 0, mix: { pt: 0, tink: 0, sink: 0, fg: 0, fifa: 0 }, trend: [] });
   fs.forEach(g => {
     const c = calc(g), per = {};
     ['A', 'B'].forEach(t => {
       g['team' + t].forEach(id => { const p = en(id); p.g++; if (g.winner === t) p.w++; per[id] = { pts: 0, sink: 0, t: t }; });
-      const key = g['team' + t].slice().sort().join('|'), d = D[key] || (D[key] = { ids: g['team' + t].slice().sort(), g: 0, w: 0, pf: 0, pa: 0 });
-      d.g++; if (g.winner === t) d.w++; d.pf += c.sc[t]; d.pa += c.sc[opp(t)];
+      const key = g['team' + t].slice().sort().join('|'), d = D[key] || (D[key] = { ids: g['team' + t].slice().sort(), g: 0, w: 0, pf: 0, pa: 0, cb: 0 });
+      d.g++; if (g.winner === t) { d.w++; if (c.used[t] > 0) d.cb++; } // comeback: won after having to redeem d.pf += c.sc[t]; d.pa += c.sc[opp(t)];
     });
-    g.events.forEach(e => {
+    g.events.forEach((e, i) => {
       if (e.kind === 'retoss') return;
       const p = en(e.thrower), pp = per[e.thrower] || (per[e.thrower] = { pts: 0, sink: 0 }); p.toss++; tot.toss++;
+      if (c.steps[i] && c.steps[i].red && e.points && e.scoreTeam === e.team) p.red++; // a redemption toss that scored
       if (e.points && e.scoreTeam === e.team) { p.pts += e.points; pp.pts += e.points; p.mix[mixKey(e)] += e.points; }
       if (e.points) tot.pts += e.points;
       if (e.kind === 'tink') p.tink++;
@@ -477,7 +533,7 @@ function computeStats() {
 }
 const COLS = [['name', 'Player', 'Player'], ['g', 'GP', 'Games played'], ['w', 'W', 'Wins'], ['pct', 'Win%', 'Win percentage'], ['toss', 'Toss', 'Tosses'], ['pts', 'Pts', 'Points scored'],
   ['ppt', 'P/Toss', 'Points per toss'], ['ppg', 'P/Game', 'Points per game'], ['tink', 'Tink', 'Tinks'], ['sink', 'Sink', 'Sinks'], ['fg', 'FG', 'Field goals'], ['ctch', 'Catch', 'One-hand catches'],
-  ['miss', 'Shrt/Low', 'Short and too-low tosses'], ['fifa', 'FIFA', 'FIFA catches'], ['ss', 'Self', 'Self-sinks']];
+  ['miss', 'Shrt/Low', 'Short and too-low tosses'], ['fifa', 'FIFA', 'FIFA catches'], ['ss', 'Self', 'Self-sinks'], ['red', 'Rdm', 'Redemptions: redemption tosses that scored']];
 function fmt(k, v) { return k === 'pct' ? Math.round(v * 100) + '%' : k === 'ppt' ? v.toFixed(2) : k === 'ppg' ? v.toFixed(1) : k === 'name' ? esc(v) : String(v); }
 function fdate(t) { if (!t) return ''; try { return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (e) { return ''; } }
 
@@ -523,8 +579,9 @@ function mixChart(rows) {
 }
 
 /* ---------- views ---------- */
-function describe(e) {
-  let s = '<b>' + esc(pname(e.thrower)) + '</b> &middot; ' + esc(KIND[e.kind] || e.kind);
+function describe(e, step) {
+  let s = '<b>' + esc(pname(e.thrower)) + '</b> &middot; ' + (step && step.red ? 'Redemption &middot; ' : '') + esc(KIND[e.kind] || e.kind);
+  if (step && step.red && (step.knock || step.add)) s += ' <span class="muted num">&mdash; ' + step.before.A + '-' + step.before.B + ' &rarr; ' + step.after.A + '-' + step.after.B + '</span>';
   if (e.reason && REASON[e.reason]) s += ' <span class="muted">(' + esc(REASON[e.reason].toLowerCase()) + ')</span>';
   if (e.cup === 'partner') s += ' <span class="muted">(partner\'s cup)</span>';
   if (e.defender) s += ' <span class="muted">' + (e.kind === 'caught' || e.kind === 'fifaCatch' ? 'by ' : e.kind === 'sink' ? 'in the cup of ' : e.fifa ? 'FIFA by ' : 'on ') + esc(pname(e.defender)) + '</span>';
@@ -533,26 +590,38 @@ function describe(e) {
   return s;
 }
 function feed(g, limit) {
-  const sc = { A: 0, B: 0 }; let rows = [];
-  g.events.forEach(e => { if (e.scoreTeam && e.points) sc[e.scoreTeam] += e.points;
-    rows.push('<li><span class="sc">' + sc.A + '&ndash;' + sc.B + '</span><span>' + describe(e) + '</span>' + (e.points ? '<span class="pt t' + e.scoreTeam + '">+' + e.points + '</span>' : '<span class="pt muted">&mdash;</span>') + '</li>'); });
+  const steps = calc(g).steps, sc = { A: 0, B: 0 }; let rows = [];
+  g.events.forEach((e, i) => {
+    const step = steps[i]; let pt;
+    if (step) { sc.A = step.after.A; sc.B = step.after.B; } else if (e.scoreTeam && e.points) sc[e.scoreTeam] += e.points; // (no step: a toss after the game was decided)
+    if (step && step.red && (step.knock || step.add)) pt = '<span class="pt t' + e.scoreTeam + '">' + (step.knock ? '&minus;' + step.knock : '') + (step.knock && step.add ? ' ' : '') + (step.add ? '+' + step.add : '') + '</span>';
+    else pt = e.points ? '<span class="pt t' + e.scoreTeam + '">+' + e.points + '</span>' : '<span class="pt muted">&mdash;</span>';
+    rows.push('<li' + (step && step.red ? ' class="red"' : '') + '><span class="sc">' + sc.A + '&ndash;' + sc.B + '</span><span>' + describe(e, step) + '</span>' + pt + '</li>'); });
   if (limit) { rows = rows.reverse().slice(0, limit); }
   return rows.length ? '<ol class="feed">' + rows.join('') + '</ol>' : '<p class="muted small">No tosses yet. Somebody throw something.</p>';
 }
+function redBanner(g, c) {
+  const r = c.red, T = g.settings.target, left = MAX_RED - c.used[r.team], down = c.sc[r.leader] < T;
+  return '<div class="redbar" id="redemption-banner" role="status" aria-live="polite"><b>Redemption</b><span>' + esc(tname(g, r.team)) +
+    (down ? ' knocked them back to ' + (T - 1) : ' need' + (/ & /.test(tname(g, r.team)) ? '' : 's') + ' to knock them back to ' + (T - 1)) +
+    ' &middot; toss ' + Math.min(2, r.n + 1) + ' of 2 &middot; redemptions left: ' + left + '</span></div>';
+}
 function statusLine(g, c) {
-  const st = g.settings, rule = 'First to ' + st.target + (st.winBy2 ? ', win by 2' : ''), gp = [];
-  if (g.status === 'final') return '<p class="status">Final' + (g.called ? ' &middot; called early' : '') + '</p>';
-  if (c.hold) return '<p class="status hot" aria-live="polite">' + esc(tname(g, c.hold)) + " can't win on a FIFA &mdash; play on until a non-FIFA point wins it</p>";
+  const st = g.settings, redRule = st.winRule === 'redemption', gp = [];
+  const rule = '<p class="status dim rule" id="rule-line">' + ruleText(st) + (redRule && g.status !== 'final' ? ' <span class="num">(left: ' + (MAX_RED - c.used.A) + ' &middot; ' + (MAX_RED - c.used.B) + ')</span>' : '') + '</p>';
+  if (g.status === 'final') return '<p class="status">Final' + (g.called ? ' &middot; called early' : '') + '</p>' + rule;
+  if (c.red) return redBanner(g, c) + rule;
+  if (c.hold) return '<p class="status hot" aria-live="polite">' + esc(tname(g, c.hold)) + " can't win on a FIFA &mdash; play on until a non-FIFA point " + (redRule ? 'counts' : 'wins it') + '</p>' + rule;
   ['A', 'B'].forEach(t => { const s = { A: c.sc.A, B: c.sc.B }; s[t]++; if (met(s, t, st)) gp.push(t); });
-  if (gp.length) return '<p class="status hot" aria-live="polite">Game point &mdash; ' + gp.map(t => esc(tname(g, t))).join(' and ') + '</p>';
-  if (st.winBy2 && c.sc.A >= st.target - 1 && c.sc.B >= st.target - 1) return '<p class="status" aria-live="polite">Win by 2 &mdash; keep tossing</p>';
-  return '<p class="status dim" aria-live="polite">' + rule + '</p>';
+  if (gp.length) return '<p class="status hot" aria-live="polite">Game point &mdash; ' + gp.map(t => esc(tname(g, t)) + (redRule ? (c.used[opp(t)] < MAX_RED ? ' (redemption to follow)' : ' (no redemption left)') : '')).join(' and ') + '</p>' + rule;
+  if (st.winRule === 'winBy2' && c.sc.A >= st.target - 1 && c.sc.B >= st.target - 1) return '<p class="status" aria-live="polite">Win by 2 &mdash; keep tossing</p>' + rule;
+  return rule;
 }
 function board(g, c, ti) {
   const h = t => { const on = ti && ti.team === t, won = g.status === 'final' && g.winner === t;
     return '<div class="half t' + t + (on ? ' on' : '') + (won ? ' won' : '') + '"><div class="who"><span>' + tnameH(g, t) + '</span></div><div class="score num" id="score-' + t + '" aria-label="' + esc(tname(g, t)) + ' score">' + c.sc[t] + '</div>' +
-      '<span class="tossing' + (on || won ? '' : ' off') + '"' + (on || won ? '' : ' aria-hidden="true"') + '>' + (won ? 'Winners' : die(1, 'sm') + ' throwing') + '</span></div>'; };
-  return '<section class="board" id="board" aria-label="Scoreboard">' + h('A') + '<div class="mid" aria-hidden="true"></div>' + h('B') + statusLine(g, c) + '</section>';
+      '<span class="tossing' + (on || won ? '' : ' off') + '"' + (on || won ? '' : ' aria-hidden="true"') + '>' + (won ? 'Winners' : die(1, 'sm') + (c.red ? ' redeeming' : ' throwing')) + '</span></div>'; };
+  return '<section class="board' + (c.red ? ' redeem' : '') + '" id="board" aria-label="Scoreboard">' + h('A') + '<div class="mid" aria-hidden="true"></div>' + h('B') + statusLine(g, c) + '</section>';
 }
 function chip(k, v, label) { const on = ui.panel && ui.panel[k] === v; return '<button type="button" class="chip" data-act="pset" data-k="' + k + '" data-v="' + esc(v) + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + esc(label) + '</button>'; }
 function panelView(g, ti) {
@@ -585,12 +654,13 @@ function panelView(g, ti) {
 }
 function liveView(g) {
   const c = calc(g), ti = tossInfo(g), st = g.settings; let h = board(g, c, ti);
+  if (ui.panel && ui.panel.kind === 'fifa' && ti.red) ui.panel = null; // no FIFA in redemption
   if (ui.panel) return h + panelView(g, ti);
   const out = (kind, label, sub, val, cls) => '<button type="button" class="out ' + (cls || '') + '" id="out-' + kind + '" data-act="out" data-v="' + kind + '"><span class="lbl">' + label + '<small>' + sub + '</small></span>' + (val ? '<span class="val">+' + val + '</span>' : '') + '</button>';
   const other = opp(ti.team);
-  h += '<section class="thrower t' + ti.team + '" aria-label="Who is throwing"><h3 class="tape">Who\'s throwing?</h3><div class="throw-row">' +
-    g['team' + ti.team].map(id => '<button type="button" class="btn who t' + ti.team + '" data-act="thrower" data-v="' + id + '" aria-pressed="' + (id === ti.thr ? 'true' : 'false') + '">' + esc(pname(id)) + '</button>').join('') +
-    '<button type="button" class="btn swap" id="switch-toss" data-act="switch" aria-label="Give the toss to ' + esc(tname(g, other)) + '"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Other side</span></button></div></section>';
+  h += '<section class="thrower t' + ti.team + '" aria-label="Who is throwing"><h3 class="tape">' + (ti.red ? 'Redemption toss ' + Math.min(2, ti.red.n + 1) + ' of 2 &middot; one each' : 'Who\'s throwing?') + '</h3><div class="throw-row">' +
+    g['team' + ti.team].map(id => '<button type="button" class="btn who t' + ti.team + '" data-act="thrower" data-v="' + id + '" aria-pressed="' + (id === ti.thr ? 'true' : 'false') + '"' + (ti.red && ti.free.indexOf(id) < 0 ? ' disabled' : '') + '>' + esc(pname(id)) + '</button>').join('') +
+    (ti.red ? '</div></section>' : '<button type="button" class="btn swap" id="switch-toss" data-act="switch" aria-label="Give the toss to ' + esc(tname(g, other)) + '"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Other side</span></button></div></section>');
   h += '<section class="stack" aria-label="Log a toss"><div class="outs scoring">' +
     out('sink', 'Sink!', 'In the cup', 3, 'score cup wide') +
     out('point', 'Point', 'Hit the table, not caught', 1, 'score') +
@@ -598,7 +668,7 @@ function liveView(g) {
     (st.fieldGoals ? out('fg', 'Field goal', 'Back through own cups', 2, 'score' + (st.tinks ? ' wide' : '')) : '') +
     '</div><div class="outs">' +
     out('caught', 'Caught', 'One-hand catch') + out('short', 'Short / dead', 'Own side or on the line') + out('low', 'Too low', 'Below height') + out('retoss', 'Re-toss', 'Disputed, throw again') +
-    (st.fifa !== 'off' ? out('fifa', 'FIFA!', 'Kicked back into play') : '') + out('selfSink', 'Self-sink', st.selfSinkLoss ? 'Automatic loss' : 'Own or partner\'s cup', 0, 'bad') + '</div></section>';
+    (st.fifa !== 'off' && !ti.red ? out('fifa', 'FIFA!', 'Kicked back into play') : '') + out('selfSink', 'Self-sink', st.selfSinkLoss ? 'Automatic loss' : 'Own or partner\'s cup', 0, 'bad') + '</div></section>';
   h += '<section class="card stack"><div class="spread"><h3 class="tape">Recent tosses</h3><button type="button" class="btn sm" id="undo-last" data-act="undo"' + (g.events.length ? '' : ' disabled') + '>Undo last</button></div>' + feed(g, 8) + '</section>';
   if (ui.confirmEnd) {
     const lead = c.sc.A === c.sc.B ? null : (c.sc.A > c.sc.B ? 'A' : 'B');
@@ -611,7 +681,8 @@ function liveView(g) {
 function finishedView(g) {
   const c = calc(g), w = g.winner, last = g.events[g.events.length - 1];
   return board(g, c, null) + '<section class="banner" aria-live="polite"><div class="tape">Winners</div><div class="big">' + esc(tname(g, w)) + '</div><div class="fs num">' + c.sc[w] + ' &ndash; ' + c.sc[opp(w)] + '</div>' +
-    (last && last.kind === 'selfSink' && g.settings.selfSinkLoss ? '<div class="small">' + esc(pname(last.thrower)) + ' self-sank. Automatic loss.</div>' : '') + (g.called ? '<div class="small">Called early</div>' : '') + '</section>' +
+    (last && last.kind === 'selfSink' && g.settings.selfSinkLoss ? '<div class="small">' + esc(pname(last.thrower)) + ' self-sank. Automatic loss.</div>' : '') +
+    (c.survived ? '<div class="small">Survived the redemption round.</div>' : !g.called && c.winner && c.used[opp(w)] >= MAX_RED && g.settings.winRule === 'redemption' && !(last && last.kind === 'selfSink') ? '<div class="small">' + esc(tname(g, opp(w))) + ' had no redemptions left.</div>' : '') + (g.called ? '<div class="small">Called early</div>' : '') + '</section>' +
     '<div class="stack"><button type="button" class="btn primary block big" id="rematch" data-act="rematch">Rematch, same teams</button>' +
     '<button type="button" class="btn block" id="new-game" data-act="newgame">New game</button>' +
     '<button type="button" class="btn ghost block onwood" id="undo-final" data-act="undofinal">' + (g.called ? 'Reopen game' : 'Undo last toss and reopen') + '</button></div>' +
@@ -630,7 +701,9 @@ function setupView() {
     return '<li>' + pmark(id) + '<span class="nm">' + esc(pname(id)) + (S.mode === 'cloud' && !S.players[id].uid ? '<span class="tag">guest</span>' : '') + '</span>' + b('A') + b('B') + '</li>'; }).join('') + '</ul></div>' + add + '</section>';
   h += '<section class="card"><h3 class="tape">House rules</h3>' +
     '<div class="setrow"><span class="lbl">Play to</span><span class="stepper"><button type="button" class="btn sm" id="target-down" data-act="target" data-v="-1" aria-label="Lower target score">&minus;</button><span class="v num" id="target-value" aria-live="polite">' + st.target + '</span><button type="button" class="btn sm" id="target-up" data-act="target" data-v="1" aria-label="Raise target score">+</button></span></div>' +
-    sw('winBy2', st.winBy2, 'Win by 2') + sw('tinks', st.tinks, 'Tinks', 'Off the cup and down is worth 2') + sw('fieldGoals', st.fieldGoals, 'Field goals', 'Back through your own cups is worth 2') +
+    '<div class="setrow" style="display:block"><span class="lbl">Win rule<small>' + (st.winRule === 'redemption' ? 'Redemption: reach ' + st.target + ' and the other team gets 2 tosses to knock you back to ' + (st.target - 1) + '. 2 tosses, ' + MAX_RED + ' per team' : st.winRule === 'winBy2' ? 'First to ' + st.target + ', but you have to lead by 2' : 'First to ' + st.target + ' wins') + '</small></span>' +
+    '<div class="seg" style="margin-top:8px">' + RULES.map(o => '<button type="button" class="btn sm" id="rule-' + o[0] + '" data-act="rule" data-v="' + o[0] + '" aria-pressed="' + (st.winRule === o[0] ? 'true' : 'false') + '">' + o[1] + '</button>').join('') + '</div></div>' +
+    sw('tinks', st.tinks, 'Tinks', 'Off the cup and down is worth 2') + sw('fieldGoals', st.fieldGoals, 'Field goals', 'Back through your own cups is worth 2') +
     sw('selfSinkLoss', st.selfSinkLoss, 'Self-sink is an automatic loss') +
     '<div class="setrow" style="display:block"><span class="lbl">FIFA<small>' + (st.fifa === 'off' ? 'No kicking the die back into play' : st.fifa === 'preferred' ? 'Preferred: no points. A FIFA catch sits the air-ball thrower out of the next defense' : 'Points: a FIFA catch is 1 for the defense, max 3 per team. You can\'t win on a FIFA') + '</small></span>' +
     '<div class="seg" style="margin-top:8px">' + [['off', 'Off'], ['preferred', 'Preferred'], ['points', 'Points']].map(o => '<button type="button" class="btn sm" id="fifa-' + o[0] + '" data-act="fifa" data-v="' + o[0] + '" aria-pressed="' + (st.fifa === o[0] ? 'true' : 'false') + '">' + o[1] + '</button>').join('') + '</div></div></section>';
@@ -679,9 +752,9 @@ function statsView() {
   h += '<section class="stack"><h3 class="tape">Players &middot; tap a column to sort</h3><div class="scroll"><table><thead><tr>' + COLS.map(c =>
     '<th scope="col"' + (k === c[0] ? ' aria-sort="' + (dir < 0 ? 'descending' : 'ascending') + '"' : '') + '><button type="button" id="sort-' + c[0] + '" data-act="sort" data-v="' + c[0] + '" title="' + c[2] + '" aria-label="Sort by ' + c[2] + '">' + c[1] + '</button></th>').join('') +
     '</tr></thead><tbody>' + s.rows.map(r => '<tr>' + COLS.map(c => '<td' + (k === c[0] ? ' class="hi"' : '') + '>' + (c[0] === 'name' ? pmark(r.id) : '') + fmt(c[0], r[c[0]]) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' +
-    '<p class="small onwood">Finished games only. Points count what a player scored on their own tosses.</p></section>';
-  h += '<section class="stack"><h3 class="tape">Best duos</h3><div class="scroll"><table><thead><tr><th scope="col"><button type="button" disabled>Duo</button></th><th scope="col"><button type="button" disabled>W&ndash;L</button></th><th scope="col"><button type="button" disabled>Win%</button></th><th scope="col"><button type="button" disabled>Pt diff</button></th></tr></thead><tbody>' +
-    s.duos.slice(0, 10).map(d => { const df = d.pf - d.pa; return '<tr><td style="max-width:190px">' + esc(d.ids.map(pname).join(' & ')) + '</td><td>' + d.w + '&ndash;' + (d.g - d.w) + '</td><td>' + Math.round(d.pct * 100) + '%</td><td>' + (df > 0 ? '+' : '') + df + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
+    '<p class="small onwood">Finished games only. Points count what a player scored on their own tosses (a redemption shot counts in full). Rdm = redemption tosses that scored.</p></section>';
+  h += '<section class="stack"><h3 class="tape">Best duos</h3><div class="scroll"><table><thead><tr><th scope="col"><button type="button" disabled>Duo</button></th><th scope="col"><button type="button" disabled>W&ndash;L</button></th><th scope="col"><button type="button" disabled>Win%</button></th><th scope="col"><button type="button" disabled>Pt diff</button></th><th scope="col"><button type="button" disabled title="Comebacks: games won after having to redeem">Cmbk</button></th></tr></thead><tbody>' +
+    s.duos.slice(0, 10).map(d => { const df = d.pf - d.pa; return '<tr><td style="max-width:190px">' + esc(d.ids.map(pname).join(' & ')) + '</td><td>' + d.w + '&ndash;' + (d.g - d.w) + '</td><td>' + Math.round(d.pct * 100) + '%</td><td>' + (df > 0 ? '+' : '') + df + '</td><td>' + d.cb + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
   const r = s.rec, rl = (k2, x, unit) => (x ? tile(k2, x.v + ' ' + unit, esc(x.who) + ' &middot; ' + fdate(x.g.endedAt)) : '');
   const rh = rl('Most sinks in a game', r.sinks, 'sinks') + rl('Most points in a game', r.pts, 'pts') + rl('Biggest comeback', r.comeback, 'down') + rl('Longest game', r.long, 'tosses');
   if (rh) h += '<section class="stack"><h3 class="tape">Records</h3><div class="tiles two">' + rh + '</div></section>';
@@ -697,7 +770,7 @@ function historyView() {
       '<span class="small muted" style="grid-column:1/-1">' + fdate(g.endedAt) + ' &middot; ' + c.tosses + ' tosses' + (g.called ? ' &middot; called early' : '') + '</span></button>';
     if (open) {
       const st = g.settings;
-      li += '<div class="detail stack"><p class="small muted">To ' + st.target + (st.winBy2 ? ', win by 2' : '') + ' &middot; tinks ' + (st.tinks ? 'on' : 'off') + ' &middot; field goals ' + (st.fieldGoals ? 'on' : 'off') + ' &middot; FIFA ' + st.fifa + ' &middot; ' + esc(tname(g, g.firstToss || 'A')) + ' tossed first</p>' + feed(g) +
+      li += '<div class="detail stack"><p class="small muted">' + ruleText(st) + ' &middot; tinks ' + (st.tinks ? 'on' : 'off') + ' &middot; field goals ' + (st.fieldGoals ? 'on' : 'off') + ' &middot; FIFA ' + st.fifa + ' &middot; ' + esc(tname(g, g.firstToss || 'A')) + ' tossed first</p>' + feed(g) +
         (ui.confirmDel === g.id ? '<div class="confirm"><b>Delete this game and its stats?</b><button type="button" class="btn danger block" data-act="delyes" data-v="' + g.id + '">Delete game</button><button type="button" class="btn ghost block" data-act="delno">Keep it</button></div>'
           : canDelete(g) ? '<button type="button" class="btn sm ghost danger" data-act="delask" data-v="' + g.id + '">Delete game</button>' : '<p class="small muted">Only the person who logged this game or a league admin can delete it.</p>') + '</div>';
     }
@@ -825,7 +898,8 @@ function feedback(g, prev) {
     const sink = e.kind === 'sink' || e.kind === 'fifaSink';
     if (sink) { retrigger(document.getElementById('board'), 'shake'); burst('sink'); }
     if (!justWon) {
-      if (sink) stamp('Sink!', 'cup');
+      if (c.red && c.red.n === 0) stamp('Redemption!', 'quiet');
+      else if (sink) stamp('Sink!', 'cup');
       else if (e.kind === 'tink' || e.kind === 'fifaTink') stamp('Tink!');
       else if (e.kind === 'fg') stamp('Field goal!');
       else if (e.fifa) stamp('FIFA!');
@@ -901,7 +975,7 @@ const ACT = {
   pset: (v, b) => { const k = b.dataset.k; ui.panel[k] = ui.panel[k] === v ? null : v; render(); },
   pcancel: () => { ui.panel = null; render(); },
   thrower: v => { ui.thrower = v; buzz(8); render(); },
-  'switch': () => { const g = liveGame(); if (!g) return; ui.tossTeam = opp(tossInfo(g).team); ui.thrower = null; buzz(8); render(); },
+  'switch': () => { const g = liveGame(); if (!g || calc(g).red) return; ui.tossTeam = opp(tossInfo(g).team); ui.thrower = null; buzz(8); render(); },
   undo: () => { const g = liveGame(); if (!g || !g.events.length) return; ui.panel = null; ui.tossTeam = null; ui.thrower = null; saveGame(Object.assign({}, g, { events: g.events.slice(0, -1) })); },
   undofinal: () => { let g = S.games[ui.lastId]; if (!g || liveGame()) return; g = norm(ui.lastId, g);
     const ng = Object.assign({}, g, { status: 'live', winner: null, endedAt: null, events: g.called ? g.events : g.events.slice(0, -1) }); delete ng.score; delete ng.called; saveGame(ng); },
@@ -916,6 +990,7 @@ const ACT = {
   toggle: v => { ui.setup.settings[v] = !ui.setup.settings[v]; render(); },
   target: v => { const s = ui.setup.settings; s.target = Math.max(3, Math.min(30, s.target + Number(v))); render(); },
   fifa: v => { ui.setup.settings.fifa = v; render(); },
+  rule: v => { const s = ui.setup.settings; s.winRule = ruleOf({ winRule: v }); s.winBy2 = s.winRule === 'winBy2'; render(); }, // winBy2 is kept in step for phones still on the old app
   first: v => { ui.setup.firstToss = v; render(); },
   caller: () => { const su = ui.setup; su.caller = opp(su.caller); su.roll = null; render(); },
   call: v => { const su = ui.setup; su.call = su.call === v ? null : v; su.roll = null; render(); },
