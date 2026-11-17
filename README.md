@@ -42,6 +42,11 @@ Under **House rules** on the new-game screen the win rule can be switched to **W
 Games played before this rule existed keep the rule they were played with, so history and stats don't change.
 Stats add **Rdm** (a player's redemption tosses that scored) and **Cmbk** (a duo's wins in games where it had to redeem).
 
+### Export and backups
+The free Firebase plan keeps no backups. Owners and admins (anyone, without Firebase) can open the menu and use
+**Export stats** to download `players.csv` (every stat per player), `games.csv` (one row per finished game) and a full
+`backup.json` (the raw players, games and members, without e-mail addresses). File names carry the league code and date.
+
 ### Defensive stats
 Logging a **Point** asks which defender it was on (required) and how it got down (Dropped, Two-handed catch, Trapped, Bobble; defaults to Dropped).
 - **Drops**: points scored on a player, whatever the reason. Redemption tosses count the same.
@@ -71,7 +76,7 @@ only approved members of a league can read or change its data, and only the owne
 | Role | Can do |
 | --- | --- |
 | Owner (started the league) | Everything, plus make or remove admins. Cannot be removed. |
-| Admin | Approve / deny join requests, remove members, link players to members, merge duplicate players, delete any game, copy old on-device stats into the league. |
+| Admin | Approve / deny join requests, remove members, link players to members, merge duplicate players, delete any game, copy old on-device stats into the league, export stats. |
 | Member | Add players and guests, log games, undo tosses, delete games they started, link themself to a player. |
 
 ### Coming from the old code-only version

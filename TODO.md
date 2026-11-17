@@ -15,11 +15,6 @@ How the app works (read before changing anything):
 
 ## Features
 
-### 3. Export stats (backups)
-- The free Firebase plan has no backups. Add an admin-only **Export stats** button that downloads the league's
-  players and games as a spreadsheet (`.csv`, one file for players/stats and one for games), plus a full `.json`
-  backup.
-
 ### 6. Rename or delete a league
 - League owner can rename the league's display name (the rules already allow admins to change `name`).
 - Owner can delete a league, with an in-page "type the code to confirm" step. This needs a rules change

@@ -42,7 +42,7 @@ const S = { players: {}, games: {}, members: {}, member: null, league: null, use
   got: { players: false, games: false }, meta: { players: null, games: null }, syncErr: '', authErr: '', err: '' };
 const ui = { tab: 'game', pick: false, setupLive: 0, panel: null, tossTeam: null, thrower: null, confirmEnd: false, setup: null, setupOpen: false, lastId: null, watchId: null,
   sort: { k: 'w', dir: -1 }, open: null, confirmDel: null, rename: null, drafts: {}, menu: false, trend: null, chartSel: null,
-  league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false };
+  league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false, exportOpen: false };
 let fb = null, db = null, authM = null, auth = null, unsubs = [], memberUnsub = null;
 
 function lsRead() { try { const d = JSON.parse(lsGet(LS) || 'null'); if (d && typeof d === 'object') return { players: d.players || {}, games: d.games || {} }; } catch (e) {} return { players: {}, games: {} }; }
@@ -530,10 +530,12 @@ function newSetup(from) {
 /* ---------- stats ---------- */
 const MIX = [['pt', 'Points'], ['tink', 'Tinks'], ['sink', 'Sinks'], ['fg', 'Field goals'], ['fifa', 'FIFA plays']];
 function mixKey(e) { return e.fifa ? 'fifa' : e.kind === 'tink' ? 'tink' : e.kind === 'sink' ? 'sink' : e.kind === 'fg' ? 'fg' : 'pt'; }
+const newRow = id => ({ id: id, name: pname(id), g: 0, w: 0, toss: 0, pts: 0, tink: 0, sink: 0, fg: 0, ctch: 0, drop: 0, dr: { dropped: 0, twohand: 0, trapped: 0, bobble: 0 }, miss: 0, fifa: 0, ss: 0, red: 0, mix: { pt: 0, tink: 0, sink: 0, fg: 0, fifa: 0 }, trend: [] });
+const blankRow = id => Object.assign(newRow(id), { pct: 0, ppt: 0, ppg: 0, ch: 0, cpct: -1 }); // a player with no finished games
 function computeStats() {
   const P = {}, D = {}, fs = finals(), tot = { g: fs.length, toss: 0, sink: 0, pts: 0 };
   const rec = { sinks: null, pts: null, comeback: null, long: null };
-  const en = id => P[id] || (P[id] = { id: id, name: pname(id), g: 0, w: 0, toss: 0, pts: 0, tink: 0, sink: 0, fg: 0, ctch: 0, drop: 0, dr: { dropped: 0, twohand: 0, trapped: 0, bobble: 0 }, miss: 0, fifa: 0, ss: 0, red: 0, mix: { pt: 0, tink: 0, sink: 0, fg: 0, fifa: 0 }, trend: [] });
+  const en = id => P[id] || (P[id] = newRow(id));
   fs.forEach(g => {
     const c = calc(g), per = {};
     ['A', 'B'].forEach(t => {
@@ -573,6 +575,84 @@ const COLS = [['name', 'Player', 'Player'], ['g', 'GP', 'Games played'], ['w', '
   ['miss', 'Shrt/Low', 'Short and too-low tosses'], ['fifa', 'FIFA', 'FIFA catches'], ['ss', 'Self', 'Self-sinks'], ['red', 'Rdm', 'Redemptions: redemption tosses that scored']];
 function fmt(k, v) { return k === 'cpct' ? (v < 0 ? '&mdash;' : Math.round(v * 100) + '%') : k === 'pct' ? Math.round(v * 100) + '%' : k === 'ppt' ? v.toFixed(2) : k === 'ppg' ? v.toFixed(1) : k === 'name' ? esc(v) : String(v); }
 function fdate(t) { if (!t) return ''; try { return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (e) { return ''; } }
+
+/* ---------- export: spreadsheets + full backup (admins; anyone in local mode) ---------- */
+/* CSV: quote a cell when it holds a quote, comma or line break; a leading = + - @ in a text cell gets an apostrophe so a
+   spreadsheet never runs a player's name as a formula. Files start with a UTF-8 BOM so Excel reads accents correctly. */
+function csvCell(v) {
+  if (v == null) return '';
+  let s = String(v);
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+const toCsv = rows => '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+const p2 = n => (n < 10 ? '0' : '') + n;
+const ymd = t => { const d = new Date(t); return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); };
+const stamp16 = t => { if (!t) return ''; const d = new Date(t); return ymd(t) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()); };
+const exportCode = () => (S.mode === 'cloud' && S.code ? S.code : 'LOCAL');
+const exportName = (what, ext) => 'beer-die-' + exportCode() + '-' + ymd(Date.now()) + '-' + what + '.' + ext;
+const pct1 = v => Math.round(v * 1000) / 10;
+/* One row per player (players with no finished game get zeros), every column of the Stats table plus the drop reasons. */
+const XCOLS = [['Player', r => r.name], ['Account', r => (S.mode !== 'cloud' ? '' : S.players[r.id] && S.players[r.id].uid ? 'linked' : 'guest')],
+  ['Games', r => r.g], ['Wins', r => r.w], ['Losses', r => r.g - r.w], ['Win %', r => pct1(r.pct)], ['Tosses', r => r.toss], ['Points', r => r.pts],
+  ['Points per toss', r => Math.round(r.ppt * 1000) / 1000], ['Points per game', r => Math.round(r.ppg * 100) / 100], ['Tinks', r => r.tink], ['Sinks', r => r.sink], ['Field goals', r => r.fg],
+  ['Catches', r => r.ctch], ['Drops', r => r.drop], ['Catch %', r => (r.ch ? pct1(r.cpct) : '')], ['Short / too low', r => r.miss], ['FIFA catches', r => r.fifa], ['Self-sinks', r => r.ss], ['Redemptions', r => r.red],
+  ['Drops: dropped', r => r.dr.dropped], ['Drops: two-handed', r => r.dr.twohand], ['Drops: trapped', r => r.dr.trapped], ['Drops: bobble', r => r.dr.bobble], ['Player id', r => r.id]];
+function playersCsv() {
+  const s = computeStats(), by = {}; s.rows.forEach(r => { by[r.id] = r; });
+  const rows = Object.keys(S.players).map(id => by[id] || blankRow(id)).sort((a, b) => a.name.localeCompare(b.name) || (a.id < b.id ? -1 : 1));
+  return toCsv([XCOLS.map(c => c[0])].concat(rows.map(r => XCOLS.map(c => c[1](r)))));
+}
+const GCOLS = ['Date', 'Label', 'Team A players', 'Team B players', 'Score A', 'Score B', 'Winner', 'Win rule', 'Target', 'Tosses', 'Logged by', 'Called early', 'Game id'];
+function gamesCsv() {
+  const fs = finals().slice().reverse(); // oldest first
+  return toCsv([GCOLS].concat(fs.map(g => { const c = calc(g), st = g.settings;
+    return [stamp16(g.endedAt || g.startedAt), String(g.label || '').trim(), tname(g, 'A'), tname(g, 'B'), c.sc.A, c.sc.B, g.winner ? tname(g, g.winner) : '', (RULES.filter(r => r[0] === st.winRule)[0] || ['', ''])[1], st.target, c.tosses,
+      g.loggedBy && S.members[g.loggedBy] ? String(S.members[g.loggedBy].name || '') : '', g.called ? 'yes' : 'no', g.id]; })));
+}
+function backupJson() { // the raw docs, exactly as stored; members go without their e-mail addresses
+  const members = {}; Object.keys(S.members).forEach(u => { const m = Object.assign({}, S.members[u]); delete m.email; members[u] = m; });
+  return JSON.stringify({ app: 'Sig Tau Beer Die', format: 1, league: exportCode(), leagueName: S.league && S.league.name ? S.league.name : null, mode: S.mode, exportedAt: new Date().toISOString(),
+    players: S.players, games: S.games, members: members }, null, 2);
+}
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+/* Hand a file to the person. Normally a plain download. Installed to an iPhone home screen a download link may do nothing,
+   so there it goes through the share sheet (Save to Files), or failing that opens in a new tab to be saved from there. */
+async function saveFile(name, mime, text) {
+  let blob, url;
+  try { blob = new Blob([text], { type: mime }); url = URL.createObjectURL(blob); } catch (e) { toast("Couldn't build " + name + ' on this device'); return; }
+  const later = () => setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 60000);
+  if (isIOS() && standalone()) {
+    try {
+      const f = new File([blob], name, { type: mime });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: name }); toast('Shared ' + name); later(); return; }
+    } catch (e) { if (e && e.name === 'AbortError') { toast('Export cancelled'); later(); return; } }
+    let w = null; try { w = window.open(url, '_blank'); } catch (e) {}
+    toast(w ? 'Opened ' + name + ' in a new tab. Save it from there.' : "Couldn't open " + name + '. Try from Safari instead of the home-screen app.'); later(); return;
+  }
+  try {
+    const a = document.createElement('a'); a.href = url; a.download = name; a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove(); toast('Downloaded ' + name);
+  } catch (e) { let w = null; try { w = window.open(url, '_blank'); } catch (e2) {} toast(w ? 'Opened ' + name + ' in a new tab. Save it from there.' : "Couldn't download " + name); }
+  later();
+}
+function exportFile(what) {
+  if (!isAdmin() || (S.mode !== 'cloud' && S.mode !== 'local')) return;
+  if (what === 'players') return saveFile(exportName('players', 'csv'), 'text/csv;charset=utf-8', playersCsv());
+  if (what === 'games') return saveFile(exportName('games', 'csv'), 'text/csv;charset=utf-8', gamesCsv());
+  if (what === 'backup') return saveFile(exportName('backup', 'json'), 'application/json', backupJson());
+}
+function exportBlock() { // in the menu
+  if (!isAdmin()) return '';
+  const nF = finals().length, nP = Object.keys(S.players).length;
+  if (!ui.exportOpen) return '<button type="button" class="btn block" id="export-open" data-act="exportopen" aria-expanded="false">Export stats</button>';
+  return '<div class="codecard exportcard" id="export-card"><span class="tape">Export stats</span>' +
+    '<p class="small">' + (S.mode === 'cloud' ? 'The cloud keeps no backups, so save a copy now and then.' : 'These stats live on this device only, so save a copy now and then.') + ' The two spreadsheets open in Excel or Google Sheets; the backup holds everything.</p>' +
+    '<button type="button" class="btn block" id="export-players" data-act="export" data-v="players">Players and stats (.csv) <span class="small muted num">' + nP + '</span></button>' +
+    '<button type="button" class="btn block" id="export-games" data-act="export" data-v="games">Finished games (.csv) <span class="small muted num">' + nF + '</span></button>' +
+    '<button type="button" class="btn primary block" id="export-backup" data-act="export" data-v="backup">Full backup (.json)</button>' +
+    '<button type="button" class="btn sm ghost" data-act="exportopen" aria-expanded="true">Hide</button></div>';
+}
 
 /* ---------- charts (inline SVG) ---------- */
 function trendChart(p) {
@@ -976,6 +1056,7 @@ function menuView() {
   } else {
     h += '<p class="note">Cloud not set up &mdash; stats saved on this device only. Paste your Firebase config into <b>firebase-config.js</b> to share a league across phones.</p>';
   }
+  h += exportBlock();
   h += '<h3 class="tape">Lights</h3><div class="seg">' + [['auto', 'Auto'], ['light', 'Daylight'], ['dark', 'String lights']].map(o => '<button type="button" class="btn sm" data-act="theme" data-v="' + o[0] + '" aria-pressed="' + (th === o[0] ? 'true' : 'false') + '">' + o[1] + '</button>').join('') + '</div>';
   return h + '</section>';
 }
@@ -1156,7 +1237,9 @@ const ACT = {
   rmplayer: v => { if (ui.more === v) ui.more = null; put('players', v, null); },
   clearerr: () => { S.err = ''; render(); },
   reload: () => { location.reload(); },
-  menu: () => { ui.menu = !ui.menu; render(); if (ui.menu) { const el = document.getElementById('menu-close'); if (el) el.focus(); } },
+  exportopen: () => { ui.exportOpen = !ui.exportOpen; render(); const el = document.getElementById(ui.exportOpen ? 'export-players' : 'export-open'); if (el) el.focus(); },
+  export: v => { exportFile(v); },
+  menu: () => { ui.menu = !ui.menu; ui.exportOpen = false; render(); if (ui.menu) { const el = document.getElementById('menu-close'); if (el) el.focus(); } },
   menuclose: () => { ui.menu = false; render(); chipEl.focus(); },
   theme: v => { lsSet(LS_THEME, v === 'auto' ? null : v); applyTheme(); render(); },
   copycode: async () => { toast(await copyText(S.code) ? 'League code copied' : 'Copy failed — the code is ' + S.code); },

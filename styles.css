@@ -466,3 +466,4 @@ nav.tabs a{position:relative}
 .busy-note{display:block;font-size:12.5px;font-weight:600;color:var(--muted)}
 .pick[disabled]{opacity:.35;cursor:not-allowed}
 .lbl-inline{font-weight:700;font-size:15px}
+.exportcard{justify-items:stretch}
