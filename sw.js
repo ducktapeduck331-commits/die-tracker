@@ -4,7 +4,7 @@
      falling back to the cache when offline or slow.
    - The Firebase SDK and Google Fonts are cached on first use (versioned, safe to keep).
    - Firebase API traffic (Firestore, Auth) is never touched: Firestore has its own offline cache. */
-const VERSION = 'beer-die-v5';
+const VERSION = 'beer-die-v6';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'firebase-config.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png'];
 const STATIC_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];

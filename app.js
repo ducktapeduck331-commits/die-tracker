@@ -437,18 +437,27 @@ function calc(g) {
   let hold = null; if (!winner && !red) ['A', 'B'].forEach(t => { if (met(sc, t, st)) hold = t; });
   return { sc: sc, fp: fp, winner: winner, hold: hold, maxDef: maxDef, tosses: n, red: red, used: used, steps: steps, survived: survived };
 }
+/* Turn order: each team's turn is 2 tosses, one per teammate (A1, A2, then B1, B2, ...). A re-toss doesn't count.
+   Redemption tosses are their own round; afterwards the leader starts a fresh turn. Logging a toss for the other team
+   (after "Other side") starts a fresh turn for that team. */
 function tossInfo(g) {
-  let team = g.firstToss || 'A'; const last = { A: null, B: null };
-  g.events.forEach(e => { if (e.kind === 'retoss') return; last[e.team] = e.thrower; team = opp(e.team); });
-  const red = calc(g).red;
+  const c = calc(g), red = c.red;
+  let team = g.firstToss || 'A', thrown = [];
+  g.events.forEach((e, i) => {
+    if (e.kind === 'retoss') return;
+    if (c.steps[i] && c.steps[i].red) { team = opp(e.team); thrown = []; return; }
+    if (e.team !== team) { team = e.team; thrown = []; }
+    thrown.push(e.thrower);
+    if (thrown.length >= 2) { team = opp(team); thrown = []; }
+  });
   if (red) { // redemption: the redeeming team throws both, one toss per player; the order can be swapped but nobody throws twice
     const rp = g['team' + red.team], free = rp.filter(id => red.thrown.indexOf(id) < 0);
     return { team: red.team, thr: ui.thrower && free.indexOf(ui.thrower) >= 0 ? ui.thrower : free[0] || rp[0], red: red, free: free };
   }
-  if (ui.tossTeam) team = ui.tossTeam;
-  const ps = g['team' + team]; let thr = last[team] === ps[0] ? ps[1] : ps[0];
+  if (ui.tossTeam && ui.tossTeam !== team) { team = ui.tossTeam; thrown = []; }
+  const ps = g['team' + team]; let thr = ps.filter(id => thrown.indexOf(id) < 0)[0] || ps[0];
   if (ui.thrower && ps.indexOf(ui.thrower) >= 0) thr = ui.thrower;
-  return { team: team, thr: thr };
+  return { team: team, thr: thr, turnToss: thrown.length + 1 };
 }
 function pointsFor(kind, g, team) { // -> {points,to,fifa,capped}
   const st = g.settings, d = opp(team), c = calc(g), left = Math.max(0, 3 - c.fp[d]); let p;
@@ -694,7 +703,7 @@ function liveView(g) {
   if (ui.panel) return h + panelView(g, ti);
   const out = (kind, label, sub, val, cls) => '<button type="button" class="out ' + (cls || '') + '" id="out-' + kind + '" data-act="out" data-v="' + kind + '"><span class="lbl">' + label + '<small>' + sub + '</small></span>' + (val ? '<span class="val">+' + val + '</span>' : '') + '</button>';
   const other = opp(ti.team);
-  h += '<section class="thrower t' + ti.team + '" aria-label="Who is throwing"><h3 class="tape">' + (ti.red ? 'Redemption toss ' + Math.min(2, ti.red.n + 1) + ' of 2 &middot; one each' : 'Who\'s throwing?') + '</h3><div class="throw-row">' +
+  h += '<section class="thrower t' + ti.team + '" aria-label="Who is throwing"><h3 class="tape">' + (ti.red ? 'Redemption toss ' + Math.min(2, ti.red.n + 1) + ' of 2 &middot; one each' : 'Who\'s throwing? &middot; toss ' + ti.turnToss + ' of 2') + '</h3><div class="throw-row">' +
     g['team' + ti.team].map(id => '<button type="button" class="btn who t' + ti.team + '" data-act="thrower" data-v="' + id + '" aria-pressed="' + (id === ti.thr ? 'true' : 'false') + '"' + (ti.red && ti.free.indexOf(id) < 0 ? ' disabled' : '') + '>' + esc(pname(id)) + '</button>').join('') +
     (ti.red ? '</div></section>' : '<button type="button" class="btn swap" id="switch-toss" data-act="switch" aria-label="Give the toss to ' + esc(tname(g, other)) + '"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Other side</span></button></div></section>');
   h += '<section class="stack" aria-label="Log a toss"><div class="outs scoring">' +
