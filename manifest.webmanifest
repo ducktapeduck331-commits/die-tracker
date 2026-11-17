@@ -1,0 +1,17 @@
+{
+  "name": "Sig Tau Beer Die",
+  "short_name": "Sig Tau Die",
+  "description": "Keep score and stats for the chapter's Beer Die table.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#22355E",
+  "theme_color": "#22355E",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

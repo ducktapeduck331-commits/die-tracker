@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sig Tau Beer Die</title>
+<meta name="description" content="Sig Tau Beer Die: keep score and stats for the chapter's Beer Die table.">
+<meta name="theme-color" content="#22355E" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141f3a" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sig Tau Die">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Anton&family=Barlow:wght@400;500;600;700&family=Cabin+Sketch:wght@700&family=Permanent+Marker&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="no-tabs">
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="#game" aria-label="Sig Tau Beer Die, go to game"><span id="brand-die"></span><h1>Sig Tau<small>Beer Die</small></h1></a>
+    <button type="button" class="league-chip" id="league-chip" data-act="menu" hidden></button>
+  </header>
+  <div id="notes" aria-live="polite"></div>
+  <main id="view"></main>
+</div>
+<nav class="tabs" aria-label="Sections" id="tabs">
+  <a href="#game" data-tab="game"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><circle cx="9" cy="9" r="1.4" class="f"/><circle cx="15" cy="15" r="1.4" class="f"/><circle cx="12" cy="12" r="1.4" class="f"/></svg><span>Game</span></a>
+  <a href="#stats" data-tab="stats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V4M19 20v-6"/></svg><span>Stats</span></a>
+  <a href="#history" data-tab="history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h13M6 12h13M6 18h9"/></svg><span>History</span></a>
+  <a href="#players" data-tab="players"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.6-3.4 2.8-5 5.5-5s4.9 1.6 5.5 5M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 15.4c1.7.6 2.7 2.2 3 4.6"/></svg><span>Players</span><b class="tab-badge" id="members-badge" hidden></b></a>
+</nav>
+<div id="sheet" hidden></div>
+<div id="fx" aria-hidden="true"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<noscript><p style="padding:24px">Sig Tau Beer Die needs JavaScript.</p></noscript>
+<script type="module" src="app.js"></script>
+</body>
+</html>

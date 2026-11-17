@@ -1,0 +1,160 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Sig Tau Beer Die: everything for a league lives under /leagues/{CODE}.
+    //
+    //   leagues/{CODE}                 the league itself: {name, ownerUid, createdAt}
+    //   leagues/{CODE}/members/{uid}   one doc per Google account: {uid, name, photoURL, email,
+    //                                  status: "pending" | "approved", role: "owner" | "admin" | "member",
+    //                                  playerId?, requestedAt, approvedAt}
+    //   leagues/{CODE}/players/{id}    {name, createdAt, uid?}   (uid = linked account; none = guest)
+    //   leagues/{CODE}/games/{id}      {teamA, teamB, settings, events[], status, ..., loggedBy}
+    //
+    // The league code is NOT a password any more. Knowing a code only lets you ASK to join
+    // (create your own "pending" member doc). You see nothing until the owner or an admin
+    // approves you. Listing /leagues is never allowed, so codes can't be enumerated.
+
+    // ---- helpers -------------------------------------------------------------------------
+
+    // Signed in with a real account (Google). Leftover anonymous sessions don't count.
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+    function validCode(code) { return code.matches('^[A-Z0-9-]{4,32}$'); }
+
+    // The caller's own member doc in this league (only call after checking it exists).
+    function myMember(code) {
+      return get(/databases/$(database)/documents/leagues/$(code)/members/$(request.auth.uid)).data;
+    }
+    // Approved member of the league.
+    function isMember(code) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/leagues/$(code)/members/$(request.auth.uid))
+        && myMember(code).status == 'approved';
+    }
+    // Owner or admin.
+    function isAdmin(code) { return isMember(code) && myMember(code).role in ['owner', 'admin']; }
+    function isOwner(code) { return isMember(code) && myMember(code).role == 'owner'; }
+
+    // Which fields a write changes.
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // Shape check for a member doc.
+    function validMember(d, uid) {
+      return d.uid == uid
+        && d.name is string && d.name.size() <= 80
+        && d.keys().hasOnly(['uid', 'name', 'photoURL', 'email', 'status', 'role', 'playerId', 'requestedAt', 'approvedAt']);
+    }
+
+    // ---- the league doc ------------------------------------------------------------------
+
+    match /leagues/{code} {
+      // Only members can read it. That is why the app's join flow never reads this doc.
+      allow get: if isMember(code);
+      allow list, delete: if false;
+
+      // Starting a league: you must name yourself as the owner.
+      allow create: if isSignedIn() && validCode(code)
+        && request.resource.data.keys().hasOnly(['name', 'ownerUid', 'createdAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string && request.resource.data.name.size() <= 60;
+
+      // Owner/admins may rename the league. ownerUid and createdAt can never change.
+      allow update: if isAdmin(code) && changed().hasOnly(['name'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 60;
+
+      // ---- members -----------------------------------------------------------------------
+
+      match /members/{uid} {
+        // You can always read your own doc (that's how the app knows if you're pending or in).
+        // Approved members can read the whole member list.
+        allow get: if isSignedIn() && (request.auth.uid == uid || isMember(code));
+        allow list: if isMember(code);
+
+        // You can only create your OWN doc, and only in one of two shapes:
+        allow create: if isSignedIn() && request.auth.uid == uid && validCode(code)
+          && validMember(request.resource.data, uid)
+          && (
+            // 1. a join request: pending, plain member, and the league must exist
+            (request.resource.data.status == 'pending'
+              && request.resource.data.role == 'member'
+              && !('playerId' in request.resource.data)
+              && exists(/databases/$(database)/documents/leagues/$(code)))
+            // 2. the owner's own doc, written in the same batch that creates the league.
+            //    getAfter() looks at the league doc as it will be once the batch lands.
+            || (request.resource.data.status == 'approved'
+              && request.resource.data.role == 'owner'
+              && getAfter(/databases/$(database)/documents/leagues/$(code)).data.ownerUid == request.auth.uid)
+          );
+
+        allow update: if validMember(request.resource.data, uid) && (
+          // An approved member keeps their own profile fresh and links themself to a player.
+          // They can NOT touch their own status or role (no self-approval).
+          (request.auth.uid == uid && isMember(code)
+            && changed().hasOnly(['name', 'photoURL', 'email', 'playerId']))
+          // Admins link any member to a player.
+          || (isAdmin(code) && changed().hasOnly(['playerId']))
+          // Admins approve join requests (or put someone back to pending). Never on the owner's
+          // doc, and only the owner may change the status of another admin.
+          || (isAdmin(code) && resource.data.role != 'owner'
+            && changed().hasOnly(['status', 'approvedAt'])
+            && request.resource.data.status in ['pending', 'approved']
+            && (resource.data.role == 'member' || isOwner(code)))
+          // Only the owner grants or takes away admin. Nobody can be made (or unmade) owner.
+          || (isOwner(code) && resource.data.role != 'owner'
+            && changed().hasOnly(['role'])
+            && request.resource.data.role in ['member', 'admin'])
+        );
+
+        // Deny a request / remove a member: admins (removing another admin takes the owner).
+        // Leave / cancel your own request: yourself. The owner's doc can never be deleted.
+        allow delete: if isSignedIn() && resource.data.role != 'owner' && (
+          request.auth.uid == uid
+          || (isAdmin(code) && (resource.data.role == 'member' || isOwner(code)))
+        );
+      }
+
+      // ---- players -----------------------------------------------------------------------
+      // Any approved member can add, rename and remove players (guests included).
+      // The account link (`uid`) is protected so stats stay tied to the right person:
+      // you can claim an unlinked player for yourself or let go of your own; anything
+      // else (linking someone else, re-linking, removing a linked player) takes an admin.
+
+      match /players/{id} {
+        allow read: if isMember(code);
+        allow create: if isMember(code)
+          && (request.resource.data.get('uid', null) == null
+            || request.resource.data.get('uid', null) == request.auth.uid
+            || isAdmin(code));
+        allow update: if isMember(code)
+          && (request.resource.data.get('uid', null) == resource.data.get('uid', null)
+            || (resource.data.get('uid', null) == null && request.resource.data.get('uid', null) == request.auth.uid)
+            || (resource.data.get('uid', null) == request.auth.uid && request.resource.data.get('uid', null) == null)
+            || isAdmin(code));
+        allow delete: if isMember(code)
+          && (resource.data.get('uid', null) == null || isAdmin(code));
+      }
+
+      // ---- games -------------------------------------------------------------------------
+      // One phone at the table logs for all four players, so any approved member can create
+      // and update games. Every game records who started it (loggedBy), which can't be
+      // changed afterwards. Deleting takes that person or an admin.
+
+      match /games/{id} {
+        allow read: if isMember(code);
+        allow create: if isMember(code)
+          && request.resource.data.loggedBy == request.auth.uid
+          // loose sanity limit so one game doc can't grow without bound
+          && (!('events' in request.resource.data) || request.resource.data.events.size() <= 2000);
+        allow update: if isMember(code)
+          && request.resource.data.get('loggedBy', null) == resource.data.get('loggedBy', null)
+          && (!('events' in request.resource.data) || request.resource.data.events.size() <= 2000);
+        allow delete: if isAdmin(code) || (isMember(code) && resource.data.get('loggedBy', null) == request.auth.uid);
+      }
+    }
+
+    // Nothing else is readable or writable.
+    match /{document=**} { allow read, write: if false; }
+  }
+}
