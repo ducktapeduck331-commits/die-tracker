@@ -27,13 +27,6 @@ How the app works (read before changing anything):
 - Store the season on each game (name or id plus start date). Games logged before seasons existed count
   as the first season.
 
-### 11. Live scoreboard view
-- A big read-only scoreboard for spectators: team names, scores, redemption banner, last few tosses,
-  no buttons. Meant for a TV or a propped-up phone. Updates live from Firestore.
-- Reachable from the menu and by its own link (a hash like `#live`).
-- Several games can be live at once (built). Show every live game when there is more than one. The picker cards
-  already exist and are read-only without `opts.pick`: reuse `gameCard()` / `gameCards()` in `app.js`.
-
 ### 12. Tournament brackets
 - Admin creates a tournament: pick teams (duos), seeding, single elimination (double elimination optional).
 - Starting a bracket match opens a normal game with those teams; the winner advances automatically.

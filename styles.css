@@ -523,3 +523,44 @@ td:first-child .plink{max-width:calc(100% - 26px)}
 .pg .pgt b{overflow-wrap:anywhere;font-size:15px}
 .pg .fs{font-family:var(--display);font-size:26px;white-space:nowrap}
 @media (max-width:374px){.pairs{grid-template-columns:1fr}}
+
+/* live scoreboard (#live): read-only, no tab bar, scales up to a TV */
+body.live-mode{padding-bottom:calc(var(--safe-b) + 16px)}
+body.live-mode nav.tabs,body.live-mode .top{display:none}
+body.live-mode .wrap{max-width:1800px}
+body.live-mode main{padding-top:max(10px,var(--safe-t));gap:14px}
+.livebar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
+.lb-t{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;min-width:0;color:var(--wood-ink)}
+.lb-t b{font-family:var(--display);font-weight:400;font-size:clamp(22px,2.4vw,34px);letter-spacing:.04em;text-transform:uppercase;line-height:1}
+.lb-t small{font-size:13.5px;font-weight:600;color:var(--wood-muted)}
+.livedot{width:12px;height:12px;border-radius:50%;background:var(--wood-muted);flex:none}
+.livedot.on{background:var(--solo);box-shadow:0 0 0 3px color-mix(in srgb,var(--solo) 30%,transparent);animation:pulse 1.1s infinite alternate}
+.lgrid{list-style:none;margin:0;padding:0;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));align-items:start}
+.lgrid.fin{max-width:900px;width:100%;margin:0 auto}
+.lcard{min-width:0}
+.lboard{position:relative;top:auto;z-index:auto;padding-bottom:6px}
+.lboard .ltitle{grid-column:1/-1;margin:10px 12px 0;text-align:center;font-family:var(--chalkfont);font-weight:700;font-size:clamp(20px,2.6vw,40px);line-height:1.1;letter-spacing:.03em;color:var(--chalk);overflow-wrap:anywhere}
+.lboard .half,.lboard .mid{grid-row:2}
+.lboard .half .who{min-height:0;margin-top:6px}
+.lboard .half .who span{font-size:clamp(15px,1.9vw,30px);padding:5px 12px 4px}
+.lboard .half .score{font-size:clamp(84px,24vw,32vh);line-height:1}
+.lgrid.n2 .lboard .half .score{font-size:clamp(84px,13vw,27vh)}
+.lgrid.n3 .lboard .half .score{font-size:clamp(72px,9vw,22vh)}
+.lgrid.fin .lboard .half .score{font-size:clamp(72px,14vw,26vh)}
+.lboard .tossing{font-size:clamp(13px,1.5vw,22px);min-height:28px}
+.lboard .status{font-size:clamp(14px,1.5vw,22px)}
+.lboard .status.rule{font-size:clamp(12.5px,1.2vw,18px)}
+.lboard .redbar{font-size:clamp(13.5px,1.5vw,22px)}
+.lboard .redbar b{font-size:clamp(24px,3vw,44px)}
+.lfeed{grid-column:1/-1;margin:2px 12px 0;padding-top:6px;border-top:1.5px dashed rgba(255,255,255,.22);min-width:0}
+.lfh{display:block;font-family:var(--marker);font-size:13px;color:var(--chalk-dim);letter-spacing:.03em}
+.lboard .feed li{border-top-color:rgba(255,255,255,.16);color:var(--chalk);font-size:clamp(14.5px,1.35vw,20px);padding:6px 0}
+.lboard .feed .sc,.lboard .feed .muted,.lboard .lfeed p.muted{color:var(--chalk-dim)}
+.lboard .feed .sc{font-size:.9em}
+.lboard .feed .pt{font-weight:800}
+.lboard .feed .pt.tA{color:var(--chalk-a)} .lboard .feed .pt.tB{color:var(--chalk-b)}
+.lboard .feed .tag{background:rgba(255,255,255,.14);color:var(--chalk)}
+.lmeta{grid-column:1/-1;margin:4px 12px 4px;text-align:center;font-size:clamp(12.5px,1.1vw,16px);font-weight:600;color:var(--chalk-dim)}
+@media (min-width:900px){.lgrid.n1{max-width:1200px;width:100%;margin:0 auto}}
+@media (prefers-reduced-motion: reduce){.livedot.on{animation:none}}
+body.live-mode #local-banner{display:none}

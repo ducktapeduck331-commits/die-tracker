@@ -46,7 +46,7 @@ const S = { players: {}, games: {}, members: {}, member: null, league: null, use
 const ui = { tab: 'game', pick: false, setupLive: 0, panel: null, tossTeam: null, thrower: null, confirmEnd: false, setup: null, setupOpen: false, lastId: null, watchId: null,
   sort: { k: 'w', dir: -1 }, open: null, confirmDel: null, rename: null, drafts: {}, menu: false, trend: null, chartSel: null,
   league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false, exportOpen: false, h2h: { mode: 'p', a: null, b: null, da: null, db: null },
-  profile: null, from: 'stats', backScroll: null, scrollTo: null };
+  profile: null, from: 'stats', backScroll: null, scrollTo: null, liveFrom: 'game' };
 let fb = null, db = null, authM = null, auth = null, unsubs = [], memberUnsub = null;
 
 function lsRead() { try { const d = JSON.parse(lsGet(LS) || 'null'); if (d && typeof d === 'object') return { players: d.players || {}, games: d.games || {} }; } catch (e) {} return { players: {}, games: {} }; }
@@ -842,8 +842,12 @@ function gameBar(g) {
 }
 /* One live game as a card: label, teams, score, whose toss or redemption, when it started, who is logging it.
    Read-only unless opts.pick is set, so the live scoreboard view (TODO item 11) can reuse it as is. */
+function plainToss(g) { // whose toss it is from the log alone, ignoring this phone's "other side" / thrower picks
+  const keepT = ui.tossTeam, keepP = ui.thrower; ui.tossTeam = null; ui.thrower = null;
+  try { return tossInfo(g); } finally { ui.tossTeam = keepT; ui.thrower = keepP; }
+}
 function gameCard(g, opts) {
-  const c = calc(g), ti = (() => { const keepT = ui.tossTeam, keepP = ui.thrower; ui.tossTeam = null; ui.thrower = null; try { return tossInfo(g); } finally { ui.tossTeam = keepT; ui.thrower = keepP; } })();
+  const c = calc(g), ti = plainToss(g);
   const o = opts || {}, by = S.mode === 'cloud' && g.loggedBy && S.members[g.loggedBy] ? S.members[g.loggedBy].name : '';
   const row = t => '<div class="grow t' + t + (ti.team === t ? ' on' : '') + '"><span class="gnm"><span class="c' + t + '" aria-hidden="true">&#9632;</span> ' + esc(tname(g, t)) + '</span><span class="gsc num" aria-label="' + esc(tname(g, t)) + ' score">' + c.sc[t] + '</span></div>';
   return '<li class="card gcard' + (o.mine ? ' mine' : '') + '" data-game="' + esc(g.id) + '">' +
@@ -857,7 +861,8 @@ function gameCards(opts) { const sel = selGet(); return '<ul class="gcards">' + 
 function pickerView() {
   const n = liveGames().length;
   return '<h2>Live games</h2><p class="onwood small" id="picker-note">' + n + ' games are going. Pick the one this phone is scoring. It only changes this phone.</p>' + gameCards({ pick: true }) +
-    '<button type="button" class="btn block" id="picker-new" data-act="newgame">Start a new game</button>';
+    '<button type="button" class="btn block" id="picker-new" data-act="newgame">Start a new game</button>' +
+    '<button type="button" class="btn ghost block onwood" id="picker-live" data-act="golive">Live scoreboard (for a TV or a spare phone)</button>';
 }
 function liveView(g) {
   const c = calc(g), ti = tossInfo(g), st = g.settings; let h = gameBar(g) + board(g, c, ti);
@@ -1143,6 +1148,43 @@ function playersView() {
       (cl && adm && ui.more === id ? playerMore(id, !used[id]) : ''); }).join('') + '</ul></div>' +
     (cl ? '<p class="small onwood">Players with a photo are linked to a Google account. Guests are friends without the app: anyone in the league can log their tosses.</p>' : '') + mr.list;
 }
+/* ---------- live scoreboard (#live): read-only, for spectators, a TV or a propped-up phone ----------
+   Every live game as a big chalkboard. It has no listeners of its own: render() already runs on every players/games
+   snapshot (and on the storage event in local mode), so it follows the games by itself. */
+function liveBoard(g, fin) {
+  const c = calc(g), ti = fin ? null : plainToss(g), by = S.mode === 'cloud' && g.loggedBy && S.members[g.loggedBy] ? S.members[g.loggedBy].name : '';
+  const half = t => { const on = ti && ti.team === t, won = fin && g.winner === t;
+    return '<div class="half t' + t + (on ? ' on' : '') + (won ? ' won' : '') + '"><div class="who"><span>' + esc(tname(g, t)) + '</span></div>' +
+      '<div class="score num" data-score="' + esc(g.id) + ':' + t + '" aria-label="' + esc(tname(g, t)) + ' score">' + c.sc[t] + '</div>' +
+      '<span class="tossing' + (on || won ? '' : ' off') + '"' + (on || won ? '' : ' aria-hidden="true"') + '>' + (won ? 'Winners' : die(1, 'sm') + (c.red ? ' redeeming' : ' to toss')) + '</span></div>'; };
+  return '<li class="lcard"><section class="board lboard' + (c.red && !fin ? ' redeem' : '') + '" data-game="' + esc(g.id) + '" aria-label="' + esc(gameLabel(g)) + '">' +
+    '<h3 class="ltitle">' + esc(gameLabel(g)) + '</h3>' + half('A') + '<div class="mid" aria-hidden="true"></div>' + half('B') +
+    statusLine(g, c).replace(/ id="[^"]*"/g, '') + // same lines as the scorer's board; ids dropped because several boards share the page
+    (fin ? '' : '<div class="lfeed"><span class="lfh">Last tosses</span>' + feed(g, 3) + '</div>') +
+    '<p class="lmeta num">' + (fin ? 'Final &middot; ' + esc(fdate(g.endedAt)) + (ftime(g.endedAt) ? ' &middot; ' + esc(ftime(g.endedAt)) : '') : (g.startedAt ? 'Started ' + esc(ftime(g.startedAt)) : 'Live') + ' &middot; ' + c.tosses + ' toss' + (c.tosses === 1 ? '' : 'es')) + (by ? ' &middot; logged by ' + esc(by) : '') + '</p></section></li>';
+}
+function liveBoardView() {
+  const lv = liveGames(), last = finals()[0], n = lv.length;
+  let h = '<div class="livebar"><span class="lb-t"><span class="livedot' + (n ? ' on' : '') + '" aria-hidden="true"></span><b>Live scoreboard</b><small class="num" id="live-count">' + (S.mode === 'cloud' ? esc(S.code) + ' &middot; ' : '') + (n ? n + ' game' + (n === 1 ? '' : 's') + ' live' : 'no games live') + '</small></span>' +
+    '<button type="button" class="btn sm" id="live-exit" data-act="liveexit">Exit</button></div>';
+  if (n) return h + '<ul class="lgrid n' + Math.min(n, 3) + '" id="live-games">' + lv.map(g => liveBoard(g, false)).join('') + '</ul>';
+  h += '<div class="empty" id="live-none">' + die(4, 'big') + '<p><b>No games right now</b></p><p class="muted small">This screen fills in by itself when someone starts a game.</p></div>';
+  if (last) h += '<h3 class="tape">Most recent final</h3><ul class="lgrid n1 fin" id="live-last">' + liveBoard(last, true) + '</ul>';
+  return h;
+}
+/* Keep the screen awake while the live scoreboard is showing (where the browser allows it; failure is fine). */
+let wake = null, wakeBusy = false;
+function syncWake(want) {
+  try {
+    if (!want) { if (wake) { const w = wake; wake = null; w.release().catch(() => {}); } return; }
+    if (wake || wakeBusy || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+    wakeBusy = true;
+    navigator.wakeLock.request('screen').then(w => { wakeBusy = false; wake = w; w.addEventListener('release', () => { if (wake === w) wake = null; }); if (ui.tab !== 'live') syncWake(false); }, () => { wakeBusy = false; });
+  } catch (e) { wakeBusy = false; }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && document.body.classList.contains('live-mode')) syncWake(true); });
+let livePrev = {};
+
 function shownGame() { // the game the Game tab is showing on this phone, if any: its selected live game, or the winner screen of the game it just scored
   const lv = liveGames(), id = selGet();
   if (ui.pick && lv.length < 2) ui.pick = false;
@@ -1182,6 +1224,7 @@ function menuView() {
   } else {
     h += '<p class="note">Cloud not set up &mdash; stats saved on this device only. Paste your Firebase config into <b>firebase-config.js</b> to share a league across phones.</p>';
   }
+  h += '<button type="button" class="btn block" id="menu-live" data-act="golive">Live scoreboard</button>';
   h += exportBlock();
   h += '<h3 class="tape">Lights</h3><div class="seg">' + [['auto', 'Auto'], ['light', 'Daylight'], ['dark', 'String lights']].map(o => '<button type="button" class="btn sm" data-act="theme" data-v="' + o[0] + '" aria-pressed="' + (th === o[0] ? 'true' : 'false') + '">' + o[1] + '</button>').join('') + '</div>';
   return h + '</section>';
@@ -1263,7 +1306,7 @@ function render() {
   const onTab = ui.tab === 'player' ? ui.from : ui.tab;
   document.querySelectorAll('#tabs a').forEach(el => { if (el.dataset.tab === onTab) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
   const loading = S.mode === 'loading' || (S.mode === 'cloud' && !(S.got.players && S.got.games));
-  let cur = null;
+  let cur = null, liveOn = false;
   if (loading) view.innerHTML = '<div class="empty">' + die(6, 'big') + '<p>Setting the table&hellip;</p></div>';
   else if (S.mode === 'down') view.innerHTML = '<div class="empty">' + die(1, 'big') + '<p><b>Can\'t reach the cloud</b></p><p class="muted small">The first launch needs a connection to load the sync engine. After that it works offline.</p><button type="button" class="btn primary" data-act="reload">Try again</button></div>';
   else if (S.mode === 'signin') view.innerHTML = signinView();
@@ -1275,9 +1318,16 @@ function render() {
     cur = shownGame();
     const nLive = liveGames().length;
     if (ui.setupOpen || (ui.pick && nLive > 1)) cur = null; // the new-game screen or the picker is up instead of the game
-    view.innerHTML = ui.tab === 'player' ? profileView() : ui.tab === 'stats' ? statsView() : ui.tab === 'history' ? historyView() : ui.tab === 'players' ? playersView()
+    liveOn = ui.tab === 'live';
+    view.innerHTML = liveOn ? liveBoardView() : ui.tab === 'player' ? profileView() : ui.tab === 'stats' ? statsView() : ui.tab === 'history' ? historyView() : ui.tab === 'players' ? playersView()
       : ui.setupOpen ? setupView() : cur ? (cur.status === 'live' ? liveView(cur) : finishedView(cur)) : nLive > 1 ? pickerView() : setupView();
   }
+  document.body.classList.toggle('live-mode', liveOn);
+  syncWake(liveOn);
+  if (liveOn) { // pop a score when it changes
+    const now = {}; view.querySelectorAll('[data-score]').forEach(el => { const k = el.dataset.score; now[k] = el.textContent; if (k in livePrev && livePrev[k] !== now[k]) retrigger(el, 'pop'); });
+    livePrev = now;
+  } else livePrev = {};
   sheet.innerHTML = ui.menu && inApp ? menuView() : '';
   sheet.hidden = !(ui.menu && inApp);
   if (fid) { const el = document.getElementById(fid); if (el && el !== document.activeElement) { try { el.focus({ preventScroll: true }); if (ss != null) el.setSelectionRange(ss, se); } catch (e) {} } }
@@ -1357,6 +1407,8 @@ const ACT = {
     if (ui.tab !== 'player') { ui.from = TABS.indexOf(ui.tab) >= 0 ? ui.tab : 'stats'; ui.backScroll = window.scrollY; location.hash = '#player'; } else { render(); window.scrollTo(0, 0); const el = document.getElementById('profile-back'); if (el) el.focus({ preventScroll: true }); } },
   profileback: () => { location.hash = '#' + (ui.from || 'stats'); },
   histgo: v => { if (!S.games[v]) return; ui.open = v; ui.confirmDel = null; ui.scrollTo = 'hist-' + v; ui.backScroll = null; location.hash = '#history'; },
+  golive: () => { ui.menu = false; if (TABS.indexOf(ui.tab) >= 0) ui.liveFrom = ui.tab; if (location.hash !== '#live') location.hash = '#live'; else render(); },
+  liveexit: () => { location.hash = '#' + (ui.liveFrom || 'game'); },
   h2hmode: v => { ui.h2h.mode = v === 'd' ? 'd' : 'p'; render(); },
   trend: v => { ui.trend = v; ui.chartSel = null; render(); },
   pt: v => { ui.chartSel = Number(v); render(); },
@@ -1424,7 +1476,7 @@ document.addEventListener('submit', e => {
   else if (k === 'rename') { const id = f.dataset.v, p = S.players[id], d = ui.drafts['rename-input'], nm = (d == null ? '' : d).trim().slice(0, 24); ui.rename = null; ui.drafts['rename-input'] = null;
     if (p && nm && nm !== p.name) put('players', id, Object.assign({}, p, { name: nm })); else render(); }
 });
-const VIEWS = ['player']; // routed like tabs, but not on the tab bar
+const VIEWS = ['player', 'live']; // routed like tabs, but not on the tab bar
 const hashTab = () => { const t = (location.hash || '').replace('#', ''); return TABS.indexOf(t) >= 0 || VIEWS.indexOf(t) >= 0 ? t : 'game'; };
 window.addEventListener('hashchange', () => {
   const prev = ui.tab; ui.tab = hashTab(); fxEl.innerHTML = '';

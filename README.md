@@ -52,6 +52,12 @@ Tap a player's name (leaderboard, best hands, duos, an opened game in History, t
 record, streaks, offense and defense numbers, best partner (best win % with 3+ games together), toughest opponent
 (most losses against), points-per-game chart, scoring mix and their last 10 games. Tap a game there for its toss log.
 
+### Live scoreboard
+Open the menu and tap **Live scoreboard** (or go straight to `#live`) for a read-only spectator view: every live game as a
+big chalkboard with team names, scores, whose toss it is, the redemption banner and the last 3 tosses. It has no logging
+buttons, hides the tab bar, keeps the screen awake where the browser allows it, and scales up for a TV or laptop.
+With nothing live it shows the most recent final. It needs the same sign-in and membership as the rest of the app.
+
 ### Export and backups
 The free Firebase plan keeps no backups. Owners and admins (anyone, without Firebase) can open the menu and use
 **Export stats** to download `players.csv` (every stat per player), `games.csv` (one row per finished game) and a full
