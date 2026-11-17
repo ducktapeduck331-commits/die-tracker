@@ -15,21 +15,6 @@ How the app works (read before changing anything):
 
 ## Features
 
-### Top priority: multiple games at once
-- Today `liveGame()` in `app.js` returns only the newest live game, and every phone in the league shows it.
-  If a second table starts a game, the first table's phone jumps to it and tosses from both tables land in one
-  game. Until this is built, the chapter must play one game at a time.
-- Allow several live games per league. Optional game label at setup ("Table 1", "Back porch"); default label is
-  the two team names.
-- Each phone remembers which live game it is scoring (store the game id per device, e.g. localStorage, not in
-  Firestore). When more than one game is live, the Game tab shows a picker list (labels, teams, scores, whose
-  toss). A phone stays on its game until that game ends, then returns to the picker or new-game screen.
-- Starting a new game never takes over another phone's game. "Undo", "End game" and logging act only on the
-  game this phone has selected (replace every `liveGame()` use with the selected game).
-- A player can't be on two live games at once: block it at setup with a clear message.
-- Stats, history and records are unchanged: all games count toward the same league.
-- The live scoreboard view (item 11) should show every live game at once when there is more than one.
-
 ### 3. Export stats (backups)
 - The free Firebase plan has no backups. Add an admin-only **Export stats** button that downloads the league's
   players and games as a spreadsheet (`.csv`, one file for players/stats and one for games), plus a full `.json`
@@ -60,6 +45,8 @@ How the app works (read before changing anything):
 - A big read-only scoreboard for spectators: team names, scores, redemption banner, last few tosses,
   no buttons. Meant for a TV or a propped-up phone. Updates live from Firestore.
 - Reachable from the menu and by its own link (a hash like `#live`).
+- Several games can be live at once (built). Show every live game when there is more than one. The picker cards
+  already exist and are read-only without `opts.pick`: reuse `gameCard()` / `gameCards()` in `app.js`.
 
 ### 12. Tournament brackets
 - Admin creates a tournament: pick teams (duos), seeding, single elimination (double elimination optional).

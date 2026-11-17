@@ -13,6 +13,11 @@ It is a plain static site: no build step, no server. Open `index.html` from any 
 - **Players are linked to accounts.** Each member picks which player they are. Friends without the app
   can still play as **guests**; any member can log a whole game for all four players from one phone.
 - **Works with bad signal.** Tosses are saved on the phone first and sync when the connection is back.
+- **Several games at once.** Each table can run its own game. Give a game an optional table name at setup
+  ("Table 1"); otherwise it is named after the two teams. Each phone remembers which live game it is scoring
+  (saved on that phone only), and logging, undo and ending only touch that game. With more than one game live,
+  the Game tab shows a **Live games** list to pick from, and **Games: N live · Switch** above the scoreboard
+  changes this phone's game. A player can't be in two live games at once.
 - **Without Firebase** it still works, but with no sign-in and stats stay on that one device (a banner says so).
 
 ## House rule: Redemption

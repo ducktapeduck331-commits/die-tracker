@@ -446,3 +446,23 @@ nav.tabs a{position:relative}
 .hands .cd{font-size:13px;color:var(--muted);white-space:nowrap}
 .hands .pc{font-family:var(--display);font-weight:400;font-size:22px;text-align:right}
 .mystats .ms:nth-child(9):nth-last-child(2),.mystats .ms:nth-child(10):last-child{grid-column:span 2}
+
+/* ---------- several live games: label strip, picker cards, busy players ---------- */
+.gamebar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;min-width:0}
+.gamebar .glabel{flex:1;min-width:0;overflow-wrap:anywhere;font-family:var(--marker);font-size:15px;line-height:1.2;color:var(--wood-ink)}
+.gamebar .btn{flex:none;white-space:nowrap}
+.gcards{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:12px}
+.gcard{display:grid;gap:8px;min-width:0}
+.gcard.mine{outline:3px solid var(--focus);outline-offset:2px}
+.gcard .gtitle{margin:0;min-width:0;overflow-wrap:anywhere;font-family:var(--display);font-weight:400;font-size:22px;line-height:1.1;letter-spacing:.03em;text-transform:uppercase;color:var(--ink)}
+.gbadge{flex:none;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;border-radius:5px;padding:3px 7px;background:var(--surface2);color:var(--ink);border:1.5px solid var(--line)}
+.gbadge.red{background:var(--cup);color:var(--cup-ink);border-color:var(--cup-dark)}
+.grow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 10px;border-radius:10px;border:1.5px solid transparent}
+.grow.on{background:var(--surface2);border-color:var(--line)}
+.grow .gnm{min-width:0;overflow-wrap:anywhere;font-weight:700;font-size:16px}
+.grow .gsc{flex:none;font-family:var(--display);font-size:30px;line-height:1}
+.gcard .gmeta{margin:0}
+.plist li.busy .nm{color:var(--muted)}
+.busy-note{display:block;font-size:12.5px;font-weight:600;color:var(--muted)}
+.pick[disabled]{opacity:.35;cursor:not-allowed}
+.lbl-inline{font-weight:700;font-size:15px}

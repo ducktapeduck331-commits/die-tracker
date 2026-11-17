@@ -2,7 +2,8 @@
    Data model, all under leagues/{CODE}: the league doc {name, ownerUid, createdAt};
    members/{uid} {uid, name, photoURL, email, status: pending|approved, role: owner|admin|member, playerId?, requestedAt, approvedAt};
    players/{id} {name, createdAt, uid?} (uid = the Google account the player is linked to; none = guest);
-   games/{id} {teamA, teamB, settings, events[], status, winner, firstToss, startedAt, endedAt, score?, called?, loggedBy}.
+   games/{id} {teamA, teamB, settings, events[], status, winner, firstToss, startedAt, endedAt, score?, called?, loggedBy, label?}.
+   Several games can be live at once. Which live game a phone is scoring is kept on that phone only (localStorage, see myGame).
    settings {target, winRule: redemption|winBy2|first, winBy2 (legacy mirror of winRule), tinks, fieldGoals, fifa, selfSinkLoss}.
    Score, winner, whose toss and the redemption state are always derived by replaying events (see calc). Sign-in is Google only; without a Firebase config it runs local-only. */
 import { firebaseConfig, configured } from './firebase-config.js';
@@ -30,7 +31,7 @@ const REASON_SHORT = { dropped: 'Dropped', twohand: 'Two-handed', trapped: 'Trap
 const MIN_CHANCES = 5; // catches + drops needed to rank on the Best hands board
 const TABS = ['game', 'stats', 'history', 'players'];
 const CODE_RE = /^[A-Z0-9-]{4,32}$/;
-const LS = 'beerdie.v1', LS_LEAGUE = 'beerdie.league', LS_THEME = 'beerdie.theme';
+const LS = 'beerdie.v1', LS_LEAGUE = 'beerdie.league', LS_THEME = 'beerdie.theme', LS_SEL = 'beerdie.sel.';
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} };
 const reducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -39,7 +40,7 @@ const buzz = p => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (
 /* ---------- state + store ---------- */
 const S = { players: {}, games: {}, members: {}, member: null, league: null, user: null, mode: 'loading', code: null,
   got: { players: false, games: false }, meta: { players: null, games: null }, syncErr: '', authErr: '', err: '' };
-const ui = { tab: 'game', panel: null, tossTeam: null, thrower: null, confirmEnd: false, setup: null, setupOpen: false, lastId: null, watchId: null,
+const ui = { tab: 'game', pick: false, setupLive: 0, panel: null, tossTeam: null, thrower: null, confirmEnd: false, setup: null, setupOpen: false, lastId: null, watchId: null,
   sort: { k: 'w', dir: -1 }, open: null, confirmDel: null, rename: null, drafts: {}, menu: false, trend: null, chartSel: null,
   league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false };
 let fb = null, db = null, authM = null, auth = null, unsubs = [], memberUnsub = null;
@@ -95,7 +96,7 @@ function subscribe() {
 function enterLeague(code) {
   S.code = code; lsSet(LS_LEAGUE, code);
   S.players = {}; S.games = {}; S.members = {}; S.league = null; S.got = { players: false, games: false }; S.meta = { players: null, games: null }; S.syncErr = ''; S.err = '';
-  S.mode = 'cloud'; ui.menu = false; ui.setup = null; ui.setupOpen = false; ui.lastId = null; ui.watchId = null; ui.panel = null; ui.league = { busy: false, msg: '', offer: null };
+  S.mode = 'cloud'; ui.menu = false; ui.setup = null; ui.setupOpen = false; ui.lastId = null; ui.watchId = null; ui.panel = null; ui.pick = false; ui.league = { busy: false, msg: '', offer: null };
   ui.who = false; ui.whoSkip = false; ui.more = null; ui.merge = null; ui.rmMember = null; ui.confirmLeave = false;
   fxPrev = null;
   subscribe(); syncProfile(); render();
@@ -383,7 +384,29 @@ function norm(id, g) {
   return Object.assign({}, g, { id: id, teamA: g.teamA || [], teamB: g.teamB || [], events: g.events || [], settings: st });
 }
 function games() { return Object.keys(S.games).map(id => norm(id, S.games[id])).filter(g => g.teamA.length === 2 && g.teamB.length === 2); }
-function liveGame() { return games().filter(g => g.status === 'live').sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))[0] || null; }
+function liveGames() { return games().filter(g => g.status === 'live').sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)); }
+/* Several games can be live at once. Each phone remembers which one it is scoring: the game id is kept per league in
+   localStorage (never in Firestore), with an in-memory copy in case storage is blocked. */
+const selMem = {};
+const selKey = () => LS_SEL + (S.mode === 'cloud' && S.code ? S.code : 'local');
+function selGet() { const k = selKey(); if (!(k in selMem)) selMem[k] = lsGet(k) || null; return selMem[k]; }
+function selSet(id) { const k = selKey(); selMem[k] = id || null; lsSet(k, id || null); }
+/* The game this phone is scoring: the selected game if it is still live; otherwise, if exactly one game is live, that
+   one (and it becomes the selection); otherwise none, and the Game tab shows the picker. Logging, undo, ending and
+   everything else that touches "the current game" goes through here, so it only ever acts on this phone's game. */
+function myGame() {
+  const lv = liveGames(), id = selGet(), g = id ? lv.filter(x => x.id === id)[0] : null;
+  if (g) return g;
+  if (id && S.games[id] && ui.lastId === id) return null; // this phone is on that game's winner screen
+  if (lv.length === 1) { if (id !== lv[0].id) selSet(lv[0].id); return lv[0]; }
+  return null;
+}
+const gameLabel = g => String(g.label || '').trim() || tname(g, 'A') + ' vs ' + tname(g, 'B');
+function busyMap(exceptId) { // player id -> the live game they are in right now
+  const m = {}; liveGames().forEach(g => { if (g.id !== exceptId) g.teamA.concat(g.teamB).forEach(id => { m[id] = g; }); }); return m;
+}
+function setupBusy(su) { const busy = busyMap(); return su.A.concat(su.B).filter(id => busy[id]).map(id => ({ id: id, g: busy[id] })); }
+function leaveGameUi() { ui.panel = null; ui.confirmEnd = false; ui.tossTeam = null; ui.thrower = null; }
 function finals() { return games().filter(g => g.status === 'final').sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0)); }
 const tname = (g, t) => g['team' + t].map(pname).join(' & ');
 const tnameH = (g, t) => g['team' + t].map(id => (S.players[id] && S.players[id].uid ? pmark(id) : '') + esc(pname(id))).join(' &amp; '); // HTML, with avatars for linked players
@@ -475,7 +498,7 @@ function pointsFor(kind, g, team) { // -> {points,to,fifa,capped}
   return { points: 0, to: null };
 }
 function logEvent(kind, extra) {
-  const g = liveGame(); if (!g) return;
+  const g = myGame(); if (!g) return;
   const ti = tossInfo(g), pf = pointsFor(kind, g, ti.team);
   if (ti.red && kind.indexOf('fifa') === 0) return; // no FIFA in redemption
   if (kind.indexOf('fifa') === 0 && kind !== 'fifaCatch') return; // only FIFA catch can be logged now
@@ -699,8 +722,35 @@ function panelView(g, ti) {
   }
   return '<section class="card stack panel" aria-label="Toss detail">' + h + '<button type="button" class="btn ghost block" data-act="pcancel">Cancel</button></section>';
 }
+function ftime(t) { if (!t) return ''; try { return new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } }
+/* Small strip above the scoreboard: which game this is, and (when more than one is live) the way to the picker. */
+function gameBar(g) {
+  const n = liveGames().length, multi = g.status === 'live' && n > 1;
+  if (!multi && !String(g.label || '').trim()) return '';
+  return '<div class="gamebar" id="game-bar"><span class="glabel" id="game-label-shown">' + esc(gameLabel(g)) + '</span>' +
+    (multi ? '<button type="button" class="btn sm" id="games-switch" data-act="games" aria-label="Games: ' + n + ' live. Switch game">Games: ' + n + ' live &middot; <u>Switch</u></button>' : '') + '</div>';
+}
+/* One live game as a card: label, teams, score, whose toss or redemption, when it started, who is logging it.
+   Read-only unless opts.pick is set, so the live scoreboard view (TODO item 11) can reuse it as is. */
+function gameCard(g, opts) {
+  const c = calc(g), ti = (() => { const keepT = ui.tossTeam, keepP = ui.thrower; ui.tossTeam = null; ui.thrower = null; try { return tossInfo(g); } finally { ui.tossTeam = keepT; ui.thrower = keepP; } })();
+  const o = opts || {}, by = S.mode === 'cloud' && g.loggedBy && S.members[g.loggedBy] ? S.members[g.loggedBy].name : '';
+  const row = t => '<div class="grow t' + t + (ti.team === t ? ' on' : '') + '"><span class="gnm"><span class="c' + t + '" aria-hidden="true">&#9632;</span> ' + esc(tname(g, t)) + '</span><span class="gsc num" aria-label="' + esc(tname(g, t)) + ' score">' + c.sc[t] + '</span></div>';
+  return '<li class="card gcard' + (o.mine ? ' mine' : '') + '" data-game="' + esc(g.id) + '">' +
+    '<div class="spread"><h3 class="gtitle">' + esc(gameLabel(g)) + '</h3>' + (c.red ? '<span class="gbadge red">Redemption</span>' : o.mine ? '<span class="gbadge">This phone</span>' : '') + '</div>' +
+    row('A') + row('B') +
+    '<p class="small muted gmeta">' + (c.red ? esc(tname(g, c.red.team)) + ' redeeming' : esc(tname(g, ti.team)) + ' to toss') + ' &middot; ' + esc(ruleText(g.settings)) +
+    (g.startedAt ? ' &middot; started ' + esc(ftime(g.startedAt)) : '') + (by ? ' &middot; logged by ' + esc(by) : '') + '</p>' +
+    (o.pick ? '<button type="button" class="btn ' + (o.mine ? '' : 'primary ') + 'block" data-act="pickgame" data-v="' + esc(g.id) + '">' + (o.mine ? 'Back to this game' : 'Score this game') + '</button>' : '') + '</li>';
+}
+function gameCards(opts) { const sel = selGet(); return '<ul class="gcards">' + liveGames().map(g => gameCard(g, Object.assign({}, opts, { mine: !!(opts && opts.pick) && g.id === sel }))).join('') + '</ul>'; }
+function pickerView() {
+  const n = liveGames().length;
+  return '<h2>Live games</h2><p class="onwood small" id="picker-note">' + n + ' games are going. Pick the one this phone is scoring. It only changes this phone.</p>' + gameCards({ pick: true }) +
+    '<button type="button" class="btn block" id="picker-new" data-act="newgame">Start a new game</button>';
+}
 function liveView(g) {
-  const c = calc(g), ti = tossInfo(g), st = g.settings; let h = board(g, c, ti);
+  const c = calc(g), ti = tossInfo(g), st = g.settings; let h = gameBar(g) + board(g, c, ti);
   if (ui.panel && ui.panel.kind === 'fifa' && ti.red) ui.panel = null; // no FIFA in redemption
   if (ui.panel) return h + panelView(g, ti);
   const out = (kind, label, sub, val, cls) => '<button type="button" class="out ' + (cls || '') + '" id="out-' + kind + '" data-act="out" data-v="' + kind + '"><span class="lbl">' + label + '<small>' + sub + '</small></span>' + (val ? '<span class="val">+' + val + '</span>' : '') + '</button>';
@@ -722,16 +772,18 @@ function liveView(g) {
     h += '<section class="confirm" aria-label="End game"><b>End this game?</b>' +
       (lead ? '<button type="button" class="btn block" data-act="callit" data-v="' + lead + '">Call it &mdash; ' + esc(tname(g, lead)) + ' win ' + c.sc[lead] + '&ndash;' + c.sc[opp(lead)] + '</button>' : '') +
       (canDelete(g) ? '<button type="button" class="btn danger block" data-act="discard">Abandon and discard (no stats)</button>' : '<span class="small muted">Only the person who started this game or a league admin can discard it.</span>') + '<button type="button" class="btn ghost block" data-act="endno">Keep playing</button></section>';
-  } else h += '<button type="button" class="btn ghost block onwood" id="end-game" data-act="endask">End or abandon game</button>';
+  } else h += '<button type="button" class="btn ghost block onwood" id="end-game" data-act="endask">End or abandon game</button>' +
+    '<button type="button" class="btn ghost block onwood" id="another-game" data-act="newgame">Start another game (second table)</button>';
   return h;
 }
 function finishedView(g) {
-  const c = calc(g), w = g.winner, last = g.events[g.events.length - 1];
-  return board(g, c, null) + '<section class="banner" aria-live="polite"><div class="tape">Winners</div><div class="big">' + esc(tname(g, w)) + '</div><div class="fs num">' + c.sc[w] + ' &ndash; ' + c.sc[opp(w)] + '</div>' +
+  const c = calc(g), w = g.winner, last = g.events[g.events.length - 1], nLive = liveGames().length;
+  return gameBar(g) + board(g, c, null) + '<section class="banner" aria-live="polite"><div class="tape">Winners</div><div class="big">' + esc(tname(g, w)) + '</div><div class="fs num">' + c.sc[w] + ' &ndash; ' + c.sc[opp(w)] + '</div>' +
     (last && last.kind === 'selfSink' && g.settings.selfSinkLoss ? '<div class="small">' + esc(pname(last.thrower)) + ' self-sank. Automatic loss.</div>' : '') +
     (c.survived ? '<div class="small">Survived the redemption round.</div>' : !g.called && c.winner && c.used[opp(w)] >= MAX_RED && g.settings.winRule === 'redemption' && !(last && last.kind === 'selfSink') ? '<div class="small">' + esc(tname(g, opp(w))) + ' had no redemptions left.</div>' : '') + (g.called ? '<div class="small">Called early</div>' : '') + '</section>' +
     '<div class="stack"><button type="button" class="btn primary block big" id="rematch" data-act="rematch">Rematch, same teams</button>' +
     '<button type="button" class="btn block" id="new-game" data-act="newgame">New game</button>' +
+    (nLive ? '<button type="button" class="btn block" id="back-live" data-act="leavefinal">' + (nLive === 1 ? 'Go to the live game' : 'Live games (' + nLive + ')') + '</button>' : '') +
     '<button type="button" class="btn ghost block onwood" id="undo-final" data-act="undofinal">' + (g.called ? 'Reopen game' : 'Undo last toss and reopen') + '</button></div>' +
     '<section class="card stack"><h3 class="tape">Toss log</h3>' + feed(g) + '</section>';
 }
@@ -740,12 +792,18 @@ function setupView() {
   const su = ui.setup || (ui.setup = newSetup()), st = su.settings, ids = Object.keys(S.players).sort((a, b) => pname(a).localeCompare(pname(b)));
   su.A = su.A.filter(id => S.players[id]); su.B = su.B.filter(id => S.players[id]);
   const add = '<form class="row" data-form="quickadd"><input type="text" id="quick-player-name" maxlength="24" autocomplete="off" placeholder="Add a player" aria-label="New player name" value="' + esc(ui.drafts['quick-player-name'] || '') + '"><button class="btn" id="quick-player-add" type="submit">Add</button></form>';
+  const busy = busyMap(), nLive = liveGames().length, clash = setupBusy(su);
   let h = '<h2>New game</h2>';
+  if (nLive && ui.setupOpen) h += '<div class="gamebar"><span class="glabel">' + nLive + ' game' + (nLive === 1 ? '' : 's') + ' live right now</span><button type="button" class="btn sm" id="setup-back" data-act="setupback">Back to ' + (nLive === 1 ? 'the game' : 'live games') + '</button></div>';
   if (!ids.length) return h + '<div class="empty">' + die(5, 'big') + '<p><b>No players yet &mdash; add your crew to start</b></p><p class="muted small">You need four for a game of 2 v 2.</p></div>' + add;
   const slot = t => '<div class="slot t' + t + '"><b>Team ' + t + '</b>' + (su[t].length ? su[t].map(id => esc(pname(id))).join('<br>') : '<span class="muted">Pick 2</span>') + '</div>';
   h += '<section class="stack"><div class="slots">' + slot('A') + '<div class="slot-line" aria-hidden="true"></div>' + slot('B') + '</div><div class="card"><ul class="plist">' + ids.map(id => {
-    const b = t => { const on = su[t].indexOf(id) >= 0; return '<button type="button" class="pick t' + t + '" data-act="assign" data-v="' + t + ':' + id + '" aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="' + esc(pname(id)) + ' on team ' + t + '">' + t + '</button>'; };
-    return '<li>' + pmark(id) + '<span class="nm">' + esc(pname(id)) + (S.mode === 'cloud' && !S.players[id].uid ? '<span class="tag">guest</span>' : '') + '</span>' + b('A') + b('B') + '</li>'; }).join('') + '</ul></div>' + add + '</section>';
+    const bz = busy[id];
+    const b = t => { const on = su[t].indexOf(id) >= 0; return '<button type="button" class="pick t' + t + '" data-act="assign" data-v="' + t + ':' + id + '" aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="' + esc(pname(id)) + ' on team ' + t + '"' + (bz && !on ? ' disabled' : '') + '>' + t + '</button>'; };
+    return '<li' + (bz ? ' class="busy"' : '') + '>' + pmark(id) + '<span class="nm">' + esc(pname(id)) + (S.mode === 'cloud' && !S.players[id].uid ? '<span class="tag">guest</span>' : '') +
+      (bz ? '<span class="busy-note">In a game at ' + esc(gameLabel(bz)) + '</span>' : '') + '</span>' + b('A') + b('B') + '</li>'; }).join('') + '</ul></div>' +
+    (Object.keys(busy).length ? '<p class="small onwood" id="busy-help">Players in a live game can\'t be picked until that game ends.</p>' : '') + add +
+    '<div class="row"><label class="lbl-inline onwood" for="game-label">Table name <span class="small">(optional)</span></label><input type="text" id="game-label" maxlength="40" autocomplete="off" placeholder="Table 1" value="' + esc(ui.drafts['game-label'] || '') + '"></div></section>';
   h += '<section class="card"><h3 class="tape">House rules</h3>' +
     '<div class="setrow"><span class="lbl">Play to</span><span class="stepper"><button type="button" class="btn sm" id="target-down" data-act="target" data-v="-1" aria-label="Lower target score">&minus;</button><span class="v num" id="target-value" aria-live="polite">' + st.target + '</span><button type="button" class="btn sm" id="target-up" data-act="target" data-v="1" aria-label="Raise target score">+</button></span></div>' +
     '<div class="setrow" style="display:block"><span class="lbl">Win rule<small>' + (st.winRule === 'redemption' ? 'Redemption: reach ' + st.target + ' and the other team gets 2 tosses to knock you back to ' + (st.target - 1) + '. 2 tosses, ' + MAX_RED + ' per team' : st.winRule === 'winBy2' ? 'First to ' + st.target + ', but you have to lead by 2' : 'First to ' + st.target + ' wins') + '</small></span>' +
@@ -763,8 +821,9 @@ function setupView() {
     '<button type="button" class="btn sm" id="call-high" data-act="call" data-v="high" aria-pressed="' + (su.call === 'high' ? 'true' : 'false') + '">High</button>' +
     '<button type="button" class="btn sm" id="call-low" data-act="call" data-v="low" aria-pressed="' + (su.call === 'low' ? 'true' : 'false') + '">Low</button>' +
     '<button type="button" class="rollbtn" id="roll-die" data-act="roll" aria-label="Roll the die">' + die(su.roll || 5, 'big' + (su.rolledAt && Date.now() - su.rolledAt < 300 ? ' rolled' : '')) + '</button></div>' + res + '</section>';
-  const ok = su.A.length === 2 && su.B.length === 2;
-  h += '<button type="button" class="btn primary block big" id="start-game" data-act="start"' + (ok ? '' : ' disabled') + '>' + (ok ? 'Start game' : 'Pick two players per team') + '</button>';
+  const full = su.A.length === 2 && su.B.length === 2, ok = full && !clash.length;
+  if (clash.length) h += '<p class="note warn" id="busy-msg" role="alert">' + clash.map(x => esc(pname(x.id)) + ' is already in a game at ' + esc(gameLabel(x.g))).join('. ') + '. A player can\'t be in two live games at once: take them off the team, or wait for that game to end.</p>';
+  h += '<button type="button" class="btn primary block big" id="start-game" data-act="start"' + (ok ? '' : ' disabled') + '>' + (ok ? 'Start game' : clash.length ? 'A picked player is in another game' : 'Pick two players per team') + '</button>';
   return h;
 }
 function myStatsView(s) { // the signed-in person's own numbers, top of the Stats tab
@@ -815,7 +874,7 @@ function historyView() {
     const c = calc(g), open = ui.open === g.id, w = g.winner;
     const tm = t => '<span class="tm' + (w === t ? ' w' : '') + '"><span class="c' + t + '">&#9632;</span> ' + esc(tname(g, t)) + (w === t ? ' &middot; won' : '') + '</span>';
     let li = '<li><button type="button" class="hbtn" id="hist-' + g.id + '" data-act="open" data-v="' + g.id + '" aria-expanded="' + (open ? 'true' : 'false') + '">' + tm('A') + '<span class="fs num">' + c.sc.A + '&ndash;' + c.sc.B + '</span>' + tm('B') +
-      '<span class="small muted" style="grid-column:1/-1">' + fdate(g.endedAt) + ' &middot; ' + c.tosses + ' tosses' + (g.called ? ' &middot; called early' : '') + '</span></button>';
+      '<span class="small muted" style="grid-column:1/-1">' + (String(g.label || '').trim() ? esc(String(g.label).trim()) + ' &middot; ' : '') + fdate(g.endedAt) + ' &middot; ' + c.tosses + ' tosses' + (g.called ? ' &middot; called early' : '') + '</span></button>';
     if (open) {
       const st = g.settings;
       li += '<div class="detail stack"><p class="small muted">' + ruleText(st) + ' &middot; tinks ' + (st.tinks ? 'on' : 'off') + ' &middot; field goals ' + (st.fieldGoals ? 'on' : 'off') + ' &middot; FIFA ' + st.fifa + ' &middot; ' + esc(tname(g, g.firstToss || 'A')) + ' tossed first</p>' + feed(g) +
@@ -878,13 +937,25 @@ function playersView() {
       (cl && adm && ui.more === id ? playerMore(id, !used[id]) : ''); }).join('') + '</ul></div>' +
     (cl ? '<p class="small onwood">Players with a photo are linked to a Google account. Guests are friends without the app: anyone in the league can log their tosses.</p>' : '') + mr.list;
 }
-function shownGame() { // the game the Game tab is showing, if any
-  const g = liveGame();
-  if (g) { ui.watchId = g.id; return g; }
-  // a game someone else just finished on another phone: show its result here too
-  if (ui.watchId && S.games[ui.watchId] && S.games[ui.watchId].status === 'final' && !ui.setupOpen && !ui.lastId) ui.lastId = ui.watchId;
+function shownGame() { // the game the Game tab is showing on this phone, if any: its selected live game, or the winner screen of the game it just scored
+  const lv = liveGames(), id = selGet();
+  if (ui.pick && lv.length < 2) ui.pick = false;
+  // sitting on the new-game screen with nothing live, and someone starts a game on another phone: follow it, as before
+  if (ui.setupOpen && ui.setupLive === 0 && lv.length) ui.setupOpen = false;
+  if (id && !lv.some(g => g.id === id)) {
+    const raw = S.games[id];
+    if (raw && raw.status === 'final' && raw.winner && (ui.watchId === id || ui.lastId === id)) { // it ended (here or on another phone): stay on its result
+      ui.lastId = id; leaveGameUi();
+      return ui.setupOpen ? null : norm(id, raw);
+    }
+    if (raw || S.mode === 'local' || (S.meta.games && !S.meta.games.fromCache)) { // gone for good (deleted or abandoned elsewhere), or a result from an earlier visit
+      selSet(null); if (ui.lastId === id) ui.lastId = null; leaveGameUi();
+      if (!raw || raw.status !== 'final') toast('That game ended on another phone');
+    }
+  }
+  const g = myGame();
+  if (g) { if (ui.watchId !== g.id) { if (ui.watchId) leaveGameUi(); ui.watchId = g.id; } return g; }
   ui.watchId = null;
-  if (!ui.setupOpen && ui.lastId && S.games[ui.lastId]) { const f = norm(ui.lastId, S.games[ui.lastId]); if (f.status === 'final' && f.winner) return f; }
   return null;
 }
 function menuView() {
@@ -994,7 +1065,10 @@ function render() {
   else if (askWho()) view.innerHTML = whoView();
   else {
     cur = shownGame();
-    view.innerHTML = ui.tab === 'stats' ? statsView() : ui.tab === 'history' ? historyView() : ui.tab === 'players' ? playersView() : cur ? (cur.status === 'live' ? liveView(cur) : finishedView(cur)) : setupView();
+    const nLive = liveGames().length;
+    if (ui.setupOpen || (ui.pick && nLive > 1)) cur = null; // the new-game screen or the picker is up instead of the game
+    view.innerHTML = ui.tab === 'stats' ? statsView() : ui.tab === 'history' ? historyView() : ui.tab === 'players' ? playersView()
+      : ui.setupOpen ? setupView() : cur ? (cur.status === 'live' ? liveView(cur) : finishedView(cur)) : nLive > 1 ? pickerView() : setupView();
   }
   sheet.innerHTML = ui.menu && inApp ? menuView() : '';
   sheet.hidden = !(ui.menu && inApp);
@@ -1017,24 +1091,37 @@ async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; } catch (e) {}
   try { const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch (e) { return false; }
 }
+function openSetup() { // the new-game screen; leaving a winner screen for it drops this phone's selection
+  const id = selGet(), lv = liveGames();
+  if (id && !lv.some(g => g.id === id)) selSet(null);
+  ui.lastId = null; ui.pick = false; ui.setupOpen = true; ui.setupLive = lv.length; leaveGameUi(); render(); window.scrollTo(0, 0);
+}
 const ACT = {
   out: v => { if (v === 'point' || v === 'sink' || v === 'caught' || v === 'selfSink' || v === 'fifa') { ui.panel = v === 'point' ? { kind: v, reason: 'dropped' } : { kind: v }; buzz(8); render(); } else logEvent(v); },
   log: (v, b) => { let x = {}; try { x = JSON.parse(b.dataset.x || '{}'); } catch (e) {} logEvent(v, x); },
   pset: (v, b) => { const k = b.dataset.k; ui.panel[k] = ui.panel[k] === v && k !== 'reason' ? null : v; render(); },
   pcancel: () => { ui.panel = null; render(); },
   thrower: v => { ui.thrower = v; buzz(8); render(); },
-  'switch': () => { const g = liveGame(); if (!g || calc(g).red) return; ui.tossTeam = opp(tossInfo(g).team); ui.thrower = null; buzz(8); render(); },
-  undo: () => { const g = liveGame(); if (!g || !g.events.length) return; ui.panel = null; ui.tossTeam = null; ui.thrower = null; saveGame(Object.assign({}, g, { events: g.events.slice(0, -1) })); },
-  undofinal: () => { let g = S.games[ui.lastId]; if (!g || liveGame()) return; g = norm(ui.lastId, g);
+  'switch': () => { const g = myGame(); if (!g || calc(g).red) return; ui.tossTeam = opp(tossInfo(g).team); ui.thrower = null; buzz(8); render(); },
+  undo: () => { const g = myGame(); if (!g || !g.events.length) return; ui.panel = null; ui.tossTeam = null; ui.thrower = null; saveGame(Object.assign({}, g, { events: g.events.slice(0, -1) })); },
+  undofinal: () => { let g = S.games[ui.lastId]; if (!g || g.status !== 'final') return; g = norm(ui.lastId, g);
+    const busy = busyMap(g.id), clash = g.teamA.concat(g.teamB).filter(id => busy[id])[0]; // a player may have moved on to another live game
+    if (clash) { toast(pname(clash) + ' is in a game at ' + gameLabel(busy[clash]) + " now, so this one can't be reopened."); return; }
+    selSet(g.id); ui.watchId = g.id; ui.setupOpen = false; ui.pick = false;
     const ng = Object.assign({}, g, { status: 'live', winner: null, endedAt: null, events: g.called ? g.events : g.events.slice(0, -1) }); delete ng.score; delete ng.called; saveGame(ng); },
   endask: () => { ui.confirmEnd = true; render(); },
   endno: () => { ui.confirmEnd = false; render(); },
-  callit: v => { const g = liveGame(); if (!g) return; ui.confirmEnd = false; ui.lastId = g.id; ui.setupOpen = false; saveGame(Object.assign({}, g, { status: 'final', winner: v, called: true, endedAt: Date.now(), score: calc(g).sc })); },
-  discard: () => { const g = liveGame(); if (!g) return; ui.confirmEnd = false; ui.panel = null; ui.lastId = null; ui.watchId = null; put('games', g.id, null); },
-  rematch: () => { const g = S.games[ui.lastId]; ui.setup = g ? newSetup(norm(ui.lastId, g)) : null; ui.setupOpen = true; render(); window.scrollTo(0, 0); },
-  newgame: () => { ui.setup = null; ui.setupOpen = true; render(); window.scrollTo(0, 0); },
+  callit: v => { const g = myGame(); if (!g) return; ui.confirmEnd = false; ui.lastId = g.id; ui.setupOpen = false; saveGame(Object.assign({}, g, { status: 'final', winner: v, called: true, endedAt: Date.now(), score: calc(g).sc })); },
+  discard: () => { const g = myGame(); if (!g) return; leaveGameUi(); ui.lastId = null; ui.watchId = null; selSet(null); if (S.mode === 'cloud') delete S.games[g.id]; put('games', g.id, null); },
+  rematch: () => { const g = S.games[ui.lastId]; ui.setup = g ? newSetup(norm(ui.lastId, g)) : null; ui.drafts['game-label'] = g && g.label ? String(g.label) : ''; openSetup(); },
+  newgame: () => { ui.setup = null; ui.drafts['game-label'] = ''; openSetup(); },
+  setupback: () => { ui.setupOpen = false; render(); window.scrollTo(0, 0); },
+  games: () => { if (liveGames().length < 2) return; leaveGameUi(); ui.pick = true; render(); window.scrollTo(0, 0); }, // open the picker; nothing changes until a game is chosen
+  pickgame: v => { const g = liveGames().filter(x => x.id === v)[0]; if (!g) { render(); return; }
+    if (selGet() !== v) leaveGameUi(); selSet(v); ui.watchId = v; ui.lastId = null; ui.pick = false; ui.setupOpen = false; buzz(8); render(); window.scrollTo(0, 0); },
+  leavefinal: () => { selSet(null); ui.lastId = null; ui.watchId = null; ui.setupOpen = false; render(); window.scrollTo(0, 0); }, // off the winner screen, back to whatever is live
   assign: v => { const su = ui.setup, t = v.slice(0, 1), id = v.slice(2), i = su[t].indexOf(id);
-    if (i >= 0) su[t].splice(i, 1); else { if (su[t].length >= 2) return; const o = su[opp(t)].indexOf(id); if (o >= 0) su[opp(t)].splice(o, 1); su[t].push(id); } render(); },
+    if (i >= 0) su[t].splice(i, 1); else { const bz = busyMap()[id]; if (bz) { toast(pname(id) + ' is in a game at ' + gameLabel(bz)); render(); return; } if (su[t].length >= 2) return; const o = su[opp(t)].indexOf(id); if (o >= 0) su[opp(t)].splice(o, 1); su[t].push(id); } render(); },
   toggle: v => { ui.setup.settings[v] = !ui.setup.settings[v]; render(); },
   target: v => { const s = ui.setup.settings; s.target = Math.max(3, Math.min(30, s.target + Number(v))); render(); },
   fifa: v => { ui.setup.settings.fifa = v; render(); },
@@ -1044,10 +1131,17 @@ const ACT = {
   call: v => { const su = ui.setup; su.call = su.call === v ? null : v; su.roll = null; render(); },
   roll: () => { const su = ui.setup, n = 1 + Math.floor(Math.random() * 6); su.roll = n; su.rolledAt = Date.now(); buzz([15, 30, 15]);
     if (su.call) su.firstToss = ((su.call === 'high') === (n >= 4)) ? su.caller : opp(su.caller); render(); },
-  start: () => { const su = ui.setup; if (!su || su.A.length !== 2 || su.B.length !== 2 || liveGame()) return;
-    const id = uid(); ui.setup = null; ui.setupOpen = false; ui.lastId = null; ui.panel = null; ui.tossTeam = null; ui.thrower = null; buzz(30);
+  start: () => { const su = ui.setup; if (!su || su.A.length !== 2 || su.B.length !== 2) return;
+    const clash = setupBusy(su)[0]; // checked again here: another phone may have started a game with one of these players
+    if (clash) { toast(pname(clash.id) + ' is already in a game at ' + gameLabel(clash.g)); render(); return; }
+    const id = uid(), label = String(ui.drafts['game-label'] || '').trim().slice(0, 40);
+    ui.setup = null; ui.setupOpen = false; ui.pick = false; ui.lastId = null; ui.drafts['game-label'] = ''; leaveGameUi(); buzz(30);
     const ng = { teamA: su.A.slice(), teamB: su.B.slice(), settings: Object.assign({}, su.settings), events: [], status: 'live', winner: null, firstToss: su.firstToss, startedAt: Date.now(), endedAt: null };
+    if (label) ng.label = label;
     if (S.mode === 'cloud' && me()) ng.loggedBy = me();
+    // starting a game only selects it on this phone; every other phone stays on the game it is scoring
+    if (S.mode === 'cloud') S.games[id] = ng; // the snapshot listener confirms it a moment later
+    selSet(id); ui.watchId = id;
     put('games', id, ng);
     window.scrollTo(0, 0); },
   sort: v => { if (ui.sort.k === v) ui.sort.dir = -ui.sort.dir; else ui.sort = { k: v, dir: v === 'name' ? 1 : -1 }; render(); },
@@ -1056,7 +1150,7 @@ const ACT = {
   open: v => { ui.open = ui.open === v ? null : v; ui.confirmDel = null; render(); },
   delask: v => { ui.confirmDel = v; render(); },
   delno: () => { ui.confirmDel = null; render(); },
-  delyes: v => { ui.confirmDel = null; ui.open = null; if (ui.lastId === v) ui.lastId = null; put('games', v, null); },
+  delyes: v => { ui.confirmDel = null; ui.open = null; if (ui.lastId === v) ui.lastId = null; if (selGet() === v) selSet(null); put('games', v, null); },
   rename: v => { ui.rename = v; ui.drafts['rename-input'] = null; render(); const el = document.getElementById('rename-input'); if (el) { el.focus(); el.select(); } },
   renameno: () => { ui.rename = null; render(); },
   rmplayer: v => { if (ui.more === v) ui.more = null; put('players', v, null); },
