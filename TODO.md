@@ -13,17 +13,6 @@ How the app works (read before changing anything):
 
 ---
 
-## Rule and wording changes
-
-### FIFA: keep only "FIFA catch"
-- Remove the FIFA outcomes **FIFA'd onto table and dropped**, **FIFA'd off cup to ground**,
-  **FIFA'd into defending cup** and **FIFA'd into offensive cup** from the logging screen.
-- Keep **FIFA catch** only (with the existing Off / Preferred / Points setting).
-- Old games that used the removed kinds (`fifaDrop`, `fifaTink`, `fifaSink`, `fifaOwn`) must still replay and
-  show in history and stats. Only remove them from the buttons, not from `pointsFor()` / `calc()`.
-
----
-
 ## Features
 
 ### 3. Export stats (backups)

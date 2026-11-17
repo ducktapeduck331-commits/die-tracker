@@ -478,6 +478,7 @@ function logEvent(kind, extra) {
   const g = liveGame(); if (!g) return;
   const ti = tossInfo(g), pf = pointsFor(kind, g, ti.team);
   if (ti.red && kind.indexOf('fifa') === 0) return; // no FIFA in redemption
+  if (kind.indexOf('fifa') === 0 && kind !== 'fifaCatch') return; // only FIFA catch can be logged now
   if (kind === 'point' && !(extra && g['team' + opp(ti.team)].indexOf(extra.defender) >= 0)) return; // a point is always on one of the two defenders
   const ev = Object.assign({ t: Date.now(), kind: kind, thrower: ti.thr, team: ti.team, points: pf.points, scoreTeam: pf.to || null }, extra || {});
   if (ti.red) { // points stays the shot's value; knock/add record how it was split (for the log; the replay recomputes it)
@@ -692,8 +693,9 @@ function panelView(g, ti) {
     const catchSub = st.fifa === 'points' ? 'to ' + esc(tname(g, d)) : 'No points &middot; ' + esc(pname(ti.thr)) + ' sits out next defense';
     h = '<h2>FIFA!</h2>' + defChips("Who FIFA'd it? (optional)") +
       (st.fifa === 'points' ? '<p class="small muted num">FIFA points used by ' + esc(tname(g, d)) + ': ' + c.fp[d] + ' of 3. A FIFA point can\'t win the game.</p>' : '') +
-      '<div class="outs">' + fb2('fifaCatch', 0, catchSub) + fb2('fifaDrop', 1, 'to ' + esc(tname(g, ti.team))) + fb2('fifaTink', 0, 'to ' + esc(tname(g, ti.team))) +
-      fb2('fifaSink', 0, 'to ' + esc(tname(g, ti.team))) + fb2('fifaOwn', 0, 'to ' + esc(tname(g, d))) + '</div>';
+      // House rule: FIFA catch is the only FIFA outcome. The other kinds (fifaDrop/Tink/Sink/Own) stay in
+      // pointsFor()/calc() so games logged with them still replay, but they can't be logged any more.
+      '<div class="outs">' + fb2('fifaCatch', 0, catchSub) + '</div>';
   }
   return '<section class="card stack panel" aria-label="Toss detail">' + h + '<button type="button" class="btn ghost block" data-act="pcancel">Cancel</button></section>';
 }
