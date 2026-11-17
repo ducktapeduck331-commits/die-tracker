@@ -5,7 +5,8 @@ one at a time, and test each on a phone before moving on.
 
 How the app works (read before changing anything):
 - Static site on GitHub Pages: `index.html`, `styles.css`, `app.js` (ES module), `sw.js`, `firebase-config.js`.
-- Data is in Firebase Firestore under `leagues/{CODE}/players`, `leagues/{CODE}/games`, `leagues/{CODE}/members`.
+- Data is in Firebase Firestore under `leagues/{CODE}/players`, `leagues/{CODE}/games`, `leagues/{CODE}/members`,
+  `leagues/{CODE}/tournaments`.
   Access rules are in `firestore.rules` (they must be pasted into the Firebase console by hand when changed).
 - A game's score, winner, redemption state and whose toss it is are all derived by replaying `game.events`
   (`calc()` and `tossInfo()` in `app.js`). Old games must keep replaying correctly after any change.
@@ -26,11 +27,6 @@ How the app works (read before changing anything):
   with a switch for **All-time** and past seasons.
 - Store the season on each game (name or id plus start date). Games logged before seasons existed count
   as the first season.
-
-### 12. Tournament brackets
-- Admin creates a tournament: pick teams (duos), seeding, single elimination (double elimination optional).
-- Starting a bracket match opens a normal game with those teams; the winner advances automatically.
-- Bracket view shows matchups, scores and the champion.
 
 ### 13. Game-night recap
 - A summary for one night (all games logged that day): MVP (most points), most sinks, best hands (catch %),

@@ -10,6 +10,7 @@ service cloud.firestore {
     //                                  playerId?, requestedAt, approvedAt}
     //   leagues/{CODE}/players/{id}    {name, createdAt, uid?}   (uid = linked account; none = guest)
     //   leagues/{CODE}/games/{id}      {teamA, teamB, settings, events[], status, ..., loggedBy}
+    //   leagues/{CODE}/tournaments/{id}  {name, createdBy, createdAt, settings, teams[], walkovers{}, status}
     //
     // The league code is NOT a password any more. Knowing a code only lets you ASK to join
     // (create your own "pending" member doc). You see nothing until the owner or an admin
@@ -151,6 +152,26 @@ service cloud.firestore {
           && request.resource.data.get('loggedBy', null) == resource.data.get('loggedBy', null)
           && (!('events' in request.resource.data) || request.resource.data.events.size() <= 2000);
         allow delete: if isAdmin(code) || (isMember(code) && resource.data.get('loggedBy', null) == request.auth.uid);
+      }
+
+      // ---- tournaments -------------------------------------------------------------------
+      // A single-elimination bracket: its name, house rules, seeded teams and any walkovers.
+      // Every approved member can see it; only the owner and admins can create, change or
+      // delete one. The matches themselves are ordinary games (above) that carry a tournamentId
+      // and matchId, so any member can still start and score them. Who advanced is worked out
+      // from those games, never stored here. createdBy can't be changed afterwards.
+
+      match /tournaments/{id} {
+        allow read: if isMember(code);
+        allow create: if isAdmin(code)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update: if isAdmin(code)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60
+          && request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null);
+        allow delete: if isAdmin(code);
       }
     }
 

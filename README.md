@@ -58,6 +58,29 @@ big chalkboard with team names, scores, whose toss it is, the redemption banner 
 buttons, hides the tab bar, keeps the screen awake where the browser allows it, and scales up for a TV or laptop.
 With nothing live it shows the most recent final. It needs the same sign-in and membership as the rest of the app.
 
+### Tournaments
+Open the menu and tap **Tournaments** (or go to `#tournaments`). While one is going, the Game tab also shows a card for it.
+
+- **Creating one** (owner and admins; anyone without Firebase): type a **tournament name**, then build the teams by picking
+  two players each. A team can have its own **team name** ("The Sinkers"); without one it goes by "Player & Player".
+  A player can only be on one team. 2 to 32 teams. Seeding is a **random draw** or a **manual order** (move teams up and down).
+  The house rules (target, win rule, tinks, field goals, FIFA, self-sink) are picked once and used for every match;
+  the final can be given a different target.
+- **Single elimination**, any number of teams: the bracket is padded to the next power of two and the top seeds get the
+  byes. Standard seeding (1 v 16, 8 v 9, ...) keeps the top seeds apart until late.
+- **Matches are normal games.** Tap a matchup that is ready, add an optional table name, pick first toss and press
+  **Start match**. It opens on that phone like any other game, several matches can be live at once, and a player still
+  can't be in two live games. Tournament games count in the stats and show the tournament and round in History,
+  on the game cards and on the live scoreboard. Team names replace "Player & Player" on the scoreboard.
+- **The winner advances by itself.** The bracket is worked out from the games each time, never stored: reopening a finished
+  match (Undo last toss and reopen) takes the winner back out, and abandoning or deleting a match game frees the matchup.
+  A match can't be reopened once the next match in the bracket has started.
+- **Walkover / forfeit** (admins): tap a ready matchup and send a team through without a game; it can be cleared again.
+- The bracket scrolls sideways on a phone. When the final is decided a **Champions** banner goes up, and player profiles
+  count **Tournament titles**. Admins can delete a tournament; its games stay in History and in the stats.
+- **Needs a rules update.** Tournaments live in `leagues/{CODE}/tournaments`, which needs the `tournaments` block in
+  `firestore.rules`. Until the owner publishes it, the Tournaments screen says so and the rest of the app works as before.
+
 ### Export and backups
 The free Firebase plan keeps no backups. Owners and admins (anyone, without Firebase) can open the menu and use
 **Export stats** to download `players.csv` (every stat per player), `games.csv` (one row per finished game) and a full
@@ -92,8 +115,8 @@ only approved members of a league can read or change its data, and only the owne
 | Role | Can do |
 | --- | --- |
 | Owner (started the league) | Everything, plus make or remove admins. Cannot be removed. |
-| Admin | Approve / deny join requests, remove members, link players to members, merge duplicate players, delete any game, copy old on-device stats into the league, export stats. |
-| Member | Add players and guests, log games, undo tosses, delete games they started, link themself to a player. |
+| Admin | Approve / deny join requests, remove members, link players to members, merge duplicate players, delete any game, copy old on-device stats into the league, export stats, create and delete tournaments, give walkovers. |
+| Member | Add players and guests, log games, start and score tournament matches, undo tosses, delete games they started, link themself to a player. |
 
 ### Coming from the old code-only version
 
@@ -145,5 +168,5 @@ then open <http://localhost:8000>. (Service workers need `http://localhost` or H
 | `firestore.rules` | Security rules (membership, roles) to paste into the Firebase console |
 | `manifest.webmanifest`, `sw.js`, `icons/` | PWA install and offline support |
 
-When you change the app after deploying, bump `VERSION` in `sw.js` (currently `beer-die-v4`) so old caches are cleared
+When you change the app after deploying, bump `VERSION` in `sw.js` (currently `beer-die-v15`) so old caches are cleared
 and phones pick up the new files.
