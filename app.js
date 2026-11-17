@@ -33,6 +33,9 @@ const TABS = ['game', 'stats', 'history', 'players'];
 const CODE_RE = /^[A-Z0-9-]{4,32}$/;
 const LS = 'beerdie.v1', LS_LEAGUE = 'beerdie.league', LS_THEME = 'beerdie.theme', LS_SEL = 'beerdie.sel.';
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const SS_PROFILE = 'beerdie.profile';
+const ssGet = k => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
+const ssSet = (k, v) => { try { if (v == null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (e) {} };
 const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} };
 const reducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 const buzz = p => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} };
@@ -42,7 +45,8 @@ const S = { players: {}, games: {}, members: {}, member: null, league: null, use
   got: { players: false, games: false }, meta: { players: null, games: null }, syncErr: '', authErr: '', err: '' };
 const ui = { tab: 'game', pick: false, setupLive: 0, panel: null, tossTeam: null, thrower: null, confirmEnd: false, setup: null, setupOpen: false, lastId: null, watchId: null,
   sort: { k: 'w', dir: -1 }, open: null, confirmDel: null, rename: null, drafts: {}, menu: false, trend: null, chartSel: null,
-  league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false, exportOpen: false, h2h: { mode: 'p', a: null, b: null, da: null, db: null } };
+  league: { busy: false, msg: '', offer: null }, signBusy: false, who: false, whoSkip: false, more: null, merge: null, rmMember: null, confirmLeave: false, exportOpen: false, h2h: { mode: 'p', a: null, b: null, da: null, db: null },
+  profile: null, from: 'stats', backScroll: null, scrollTo: null };
 let fb = null, db = null, authM = null, auth = null, unsubs = [], memberUnsub = null;
 
 function lsRead() { try { const d = JSON.parse(lsGet(LS) || 'null'); if (d && typeof d === 'object') return { players: d.players || {}, games: d.games || {} }; } catch (e) {} return { players: {}, games: {} }; }
@@ -379,6 +383,8 @@ function whoView() {
 
 /* ---------- game logic ---------- */
 const pname = id => (S.players[id] ? S.players[id].name : 'Unknown');
+/* A player's name as a button that opens their profile page (plain text if the player no longer exists). */
+const plink = id => (S.players[id] ? '<button type="button" class="plink" data-act="profile" data-v="' + esc(id) + '" aria-label="' + esc(pname(id)) + ': open profile">' + esc(pname(id)) + '</button>' : esc(pname(id)));
 function norm(id, g) {
   const st = Object.assign({}, DEF, g.settings || {}); st.winRule = ruleOf(g.settings); st.winBy2 = st.winRule === 'winBy2';
   return Object.assign({}, g, { id: id, teamA: g.teamA || [], teamB: g.teamB || [], events: g.events || [], settings: st });
@@ -702,7 +708,7 @@ function trendChart(p) {
   return s + '<p class="readout num"><b>Game ' + (off + sel + 1) + ' &middot; ' + x.pts + ' pt' + (x.pts === 1 ? '' : 's') + '</b> &middot; ' + (x.won ? 'Won' : 'Lost') + ' ' + esc(x.fs) + ' vs ' + esc(x.vs) + ' &middot; ' + fdate(x.at) + '</p>' +
     '<p class="small muted"><span class="lg-dot"></span> win <span class="lg-dot loss"></span> loss &middot; tap a dot for the game</p>';
 }
-function mixChart(rows) {
+function mixChart(rows, solo) {
   const rs = rows.filter(r => r.pts > 0).sort((a, b) => b.pts - a.pts || a.name.localeCompare(b.name));
   if (!rs.length) return '<p class="muted small">Nobody has scored yet.</p>';
   const max = rs[0].pts, keys = MIX.filter(m => rs.some(r => r.mix[m[0]] > 0));
@@ -714,9 +720,9 @@ function mixChart(rows) {
       bar += '<rect class="m-' + m[0] + '" x="' + x.toFixed(2) + '%" y="1" width="' + w.toFixed(2) + '%" height="18" rx="4"><title>' + esc(r.name) + ' — ' + m[1] + ': ' + v + ' pts</title></rect>'; x += w;
     });
     const label = keys.filter(m => r.mix[m[0]]).map(m => m[1] + ' ' + r.mix[m[0]]).join(', ');
-    h += '<div class="mixrow"><span class="nm">' + esc(r.name) + '</span><svg class="mixbar" height="20" role="img" aria-label="' + esc(r.name) + ': ' + r.pts + ' points. ' + esc(label) + '">' + bar + '</svg><span class="tot num">' + r.pts + '</span></div>';
+    h += '<div class="mixrow"><span class="nm">' + (solo ? esc(r.name) : plink(r.id)) + '</span><svg class="mixbar" height="20" role="img" aria-label="' + esc(r.name) + ': ' + r.pts + ' points. ' + esc(label) + '">' + bar + '</svg><span class="tot num">' + r.pts + '</span></div>';
   });
-  return h + '</div><p class="small muted">Points each player scored on their own tosses, by how they got them.</p>';
+  return h + '</div><p class="small muted">' + (solo ? 'Points scored on their own tosses, by how they got them.' : 'Points each player scored on their own tosses, by how they got them.') + '</p>';
 }
 
 function dropChart(rows) {
@@ -731,7 +737,7 @@ function dropChart(rows) {
       bar += '<rect class="d-' + k + '" x="' + x.toFixed(2) + '%" y="1" width="' + w.toFixed(2) + '%" height="18" rx="4"><title>' + esc(r.name) + ' — ' + REASON_SHORT[k] + ': ' + v + '</title></rect>'; x += w;
     });
     const label = keys.filter(k => r.dr[k]).map(k => REASON_SHORT[k] + ' ' + r.dr[k]).join(', ');
-    h += '<div class="mixrow"><span class="nm">' + esc(r.name) + '</span><svg class="mixbar" height="20" role="img" aria-label="' + esc(r.name) + ': ' + r.drop + ' drop' + (r.drop === 1 ? '' : 's') + '. ' + esc(label) + '">' + bar + '</svg><span class="tot num">' + r.drop + '</span></div>';
+    h += '<div class="mixrow"><span class="nm">' + plink(r.id) + '</span><svg class="mixbar" height="20" role="img" aria-label="' + esc(r.name) + ': ' + r.drop + ' drop' + (r.drop === 1 ? '' : 's') + '. ' + esc(label) + '">' + bar + '</svg><span class="tot num">' + r.drop + '</span></div>';
   });
   return h + '</div>';
 }
@@ -741,9 +747,9 @@ function defenseView(rows) {
   const n = (v, one, many) => v + ' ' + (v === 1 ? one : many);
   let h = '<section class="card stack" id="defense"><h3 class="tape">Defense &middot; best hands</h3>';
   if (!q.length && !nq.length) return h + '<p class="muted small">No catches or drops logged yet. Pick the defender when you log a Point and this fills in.</p></section>';
-  if (q.length) h += '<ol class="hands" id="best-hands">' + q.map((r, i) => '<li><span class="rk num">' + (i + 1) + '</span><span class="nm">' + pmark(r.id) + esc(r.name) + '</span><span class="cd num">' + n(r.ctch, 'catch', 'catches') + ' &middot; ' + n(r.drop, 'drop', 'drops') + '</span><b class="pc num">' + Math.round(r.cpct * 100) + '%</b></li>').join('') + '</ol>';
+  if (q.length) h += '<ol class="hands" id="best-hands">' + q.map((r, i) => '<li><span class="rk num">' + (i + 1) + '</span><span class="nm">' + pmark(r.id) + plink(r.id) + '</span><span class="cd num">' + n(r.ctch, 'catch', 'catches') + ' &middot; ' + n(r.drop, 'drop', 'drops') + '</span><b class="pc num">' + Math.round(r.cpct * 100) + '%</b></li>').join('') + '</ol>';
   else h += '<p class="small muted">Nobody has ' + MIN_CHANCES + ' chances yet.</p>';
-  if (nq.length) h += '<p class="small muted num" id="hands-pending"><b>Not enough chances yet</b> (need ' + MIN_CHANCES + '): ' + nq.map(r => esc(r.name) + ' ' + r.ctch + ' of ' + r.ch).join(', ') + '</p>';
+  if (nq.length) h += '<p class="small muted num" id="hands-pending"><b>Not enough chances yet</b> (need ' + MIN_CHANCES + '): ' + nq.map(r => plink(r.id) + ' ' + r.ctch + ' of ' + r.ch).join(', ') + '</p>';
   h += '<p class="small muted">Catch % = catches out of catches + drops.</p>';
   return h + '<h3 class="tape">Drops by reason</h3>' + dropChart(rows) + '</section>';
 }
@@ -932,7 +938,7 @@ function setupView() {
 }
 function myStatsView(s) { // the signed-in person's own numbers, top of the Stats tab
   if (S.mode !== 'cloud' || !S.user) return '';
-  const pid = myPlayerId(), u = S.user, head = '<div class="mine-head">' + avatar(u.name, u.photoURL, 'lg') + '<span class="acct-txt"><span class="tape">My stats</span><b>' + esc(pid ? pname(pid) : u.name) + '</b></span></div>';
+  const pid = myPlayerId(), u = S.user, head = '<div class="mine-head">' + avatar(u.name, u.photoURL, 'lg') + '<span class="acct-txt"><span class="tape">My stats</span><b>' + (pid ? plink(pid) : esc(u.name)) + '</b></span></div>';
   if (!pid) return '<section class="card stack mine" id="my-stats">' + head + '<p class="small muted">Link your account to a player to see your own numbers here.</p><button type="button" class="btn sm" data-act="whoopen">Pick my player</button></section>';
   const r = s.rows.filter(x => x.id === pid)[0];
   if (!r || !r.g) return '<section class="card stack mine" id="my-stats">' + head + '<p class="small muted">No finished games for you yet. Get on the table.</p></section>';
@@ -942,6 +948,58 @@ function myStatsView(s) { // the signed-in person's own numbers, top of the Stat
     c('Streak', fstk(r.stk) || '&mdash;') + c('Best W streak', r.lws) + c('Sinks', r.sink) + c('Tinks', r.tink) + c('Wins rank', '#' + rank) + c('Catches', r.ctch) + c('Drops', r.drop) + c('Catch %', fmt('cpct', r.cpct)) + '</div>' +
     '<p class="small muted num">' + r.g + ' game' + (r.g === 1 ? '' : 's') + ' &middot; ' + r.toss + ' tosses &middot; ' + r.ppg.toFixed(1) + ' points per game</p></section>';
 }
+/* ---------- player profile (#player; the id lives in memory + sessionStorage, since only plain hashes are routed) ---------- */
+function profileData(id) {
+  const part = {}, opps = {}, last = [];
+  finals().forEach(g => { // newest first
+    const t = g.teamA.indexOf(id) >= 0 ? 'A' : g.teamB.indexOf(id) >= 0 ? 'B' : null; if (!t) return;
+    const won = g.winner === t, mate = g['team' + t].filter(x => x !== id)[0];
+    if (mate) { const m = part[mate] || (part[mate] = { id: mate, g: 0, w: 0 }); m.g++; if (won) m.w++; }
+    g['team' + opp(t)].forEach(o => { const x = opps[o] || (opps[o] = { id: o, g: 0, l: 0 }); x.g++; if (!won) x.l++; });
+    if (last.length < 10) { const c = calc(g); let pts = 0; g.events.forEach(e => { if (e.thrower === id && e.points && e.scoreTeam === e.team) pts += e.points; });
+      last.push({ id: g.id, at: g.endedAt || 0, won: won, mate: mate, vs: tname(g, opp(t)), sf: c.sc[t], sa: c.sc[opp(t)], pts: pts }); }
+  });
+  const ps = Object.keys(part).map(k => part[k]), os = Object.keys(opps).map(k => opps[k]), nm = (a, b) => pname(a.id).localeCompare(pname(b.id));
+  // best partner: best win % among partners with 3+ games together; with none of those, the partner played with most
+  const q = ps.filter(x => x.g >= 3).sort((a, b) => b.w / b.g - a.w / a.g || b.g - a.g || nm(a, b));
+  const best = q[0] || ps.slice().sort((a, b) => b.g - a.g || b.w - a.w || nm(a, b))[0] || null;
+  // toughest opponent: the one this player has lost to most
+  const tough = os.filter(x => x.l > 0).sort((a, b) => b.l - a.l || b.l / b.g - a.l / a.g || b.g - a.g || nm(a, b))[0] || null;
+  return { best: best, bestQualified: !!q[0], tough: tough, last: last, faced: os.length };
+}
+function profileView() {
+  const id = ui.profile, p = id ? S.players[id] : null, fromName = { game: 'Game', stats: 'Stats', history: 'History', players: 'Players' }[ui.from] || 'Stats';
+  const back = '<button type="button" class="btn sm backbtn" id="profile-back" data-act="profileback"><span aria-hidden="true">&larr;</span> Back to ' + fromName + '</button>';
+  if (!p) return back + '<div class="empty">' + die(1, 'big') + '<p><b>Pick a player</b></p><p class="muted small">Tap a name on the Stats or Players tab to open their page.</p></div>';
+  const s = computeStats(), r = s.rows.filter(x => x.id === id)[0] || blankRow(id), cl = S.mode === 'cloud', m = cl && p.uid ? S.members[p.uid] : null;
+  const ring = cl ? (p.uid ? '<i class="av xl ok" role="img" aria-label="Verified">' + esc((String(p.name || '?').trim()[0] || '?').toUpperCase()) + (m && okUrl(m.photoURL) ? '<img src="' + esc(m.photoURL) + '" alt="" referrerpolicy="no-referrer">' : '') + '</i>'
+    : '<i class="av xl guest" role="img" aria-label="Guest">' + esc((String(p.name || '?').trim()[0] || '?').toUpperCase()) + '</i>') : avatar(p.name, '', 'xl');
+  const who = cl ? (p.uid ? (p.uid === me() ? 'You' : 'Verified') + (m && m.name && m.name !== p.name ? ' &middot; ' + esc(m.name) : '') : 'Guest &middot; not linked to an account') : '';
+  const c = (k, v, cid) => '<div class="ms"><div class="v num"' + (cid ? ' id="' + cid + '"' : '') + '>' + v + '</div><div class="k">' + k + '</div></div>';
+  let h = back + '<section class="card profile-head" id="profile"><div class="ring">' + ring + '</div><h2 id="profile-name">' + esc(p.name) + '</h2>' +
+    '<p class="small muted num">' + (who ? who + ' &middot; ' : '') + r.g + ' finished game' + (r.g === 1 ? '' : 's') + '</p></section>';
+  if (!r.g) return h + '<div class="empty">' + die(3, 'big') + '<p><b>No finished games yet</b></p><p class="muted small">' + esc(p.name) + '\'s numbers show up here after their first finished game.</p></div>';
+  const d = profileData(id);
+  h += '<section class="card stack"><h3 class="tape">Record</h3><div class="mystats" id="profile-record">' + c('Games', r.g, 'pf-g') + c('W&ndash;L', r.w + '&ndash;' + (r.g - r.w), 'pf-wl') + c('Win %', Math.round(r.pct * 100) + '%', 'pf-pct') + c('Streak', fstk(r.stk) || '&mdash;', 'pf-stk') +
+    c('Best W streak', r.lws, 'pf-lws') + c('Worst L streak', r.lls, 'pf-lls') + '</div></section>';
+  h += '<section class="card stack"><h3 class="tape">Offense</h3><div class="mystats" id="profile-offense">' + c('Points', r.pts, 'pf-pts') + c('Tosses', r.toss, 'pf-toss') + c('Pts / toss', r.ppt.toFixed(2)) + c('Pts / game', r.ppg.toFixed(1)) +
+    c('Sinks', r.sink, 'pf-sink') + c('Tinks', r.tink, 'pf-tink') + c('Field goals', r.fg) + c('Short / low', r.miss, 'pf-miss') + c('Self-sinks', r.ss) + c('Redemptions', r.red) + '</div></section>';
+  h += '<section class="card stack"><h3 class="tape">Defense</h3><div class="mystats" id="profile-defense">' + c('Catches', r.ctch, 'pf-ctch') + c('Drops', r.drop, 'pf-drop') + c('Catch %', fmt('cpct', r.cpct), 'pf-cpct') + c('FIFA catches', r.fifa) + '</div>' +
+    (r.drop ? '<div class="small muted num" id="profile-drops">Drops by reason: ' + Object.keys(REASON_SHORT).filter(k => r.dr[k]).map(k => REASON_SHORT[k].toLowerCase() + ' ' + r.dr[k]).join(', ') + '</div>' : '') +
+    '<p class="small muted">Catch % = catches out of catches + drops.</p></section>';
+  const b = d.best, t = d.tough;
+  h += '<section class="card stack"><h3 class="tape">Partners and rivals</h3><div class="pairs">' +
+    '<div class="pair" id="profile-partner"><div class="k">Best partner</div>' + (b ? '<div class="v">' + plink(b.id) + '</div><div class="s num">' + b.w + '&ndash;' + (b.g - b.w) + ' together &middot; ' + Math.round(b.w / b.g * 100) + '%' + (d.bestQualified ? '' : ' &middot; most games together (needs 3 to rank)') + '</div>' : '<div class="s">No partner yet</div>') + '</div>' +
+    '<div class="pair" id="profile-rival"><div class="k">Toughest opponent</div>' + (t ? '<div class="v">' + plink(t.id) + '</div><div class="s num">Lost ' + t.l + ' of ' + t.g + ' against them</div>' : '<div class="s">' + (d.faced ? 'Nobody yet: unbeaten against everyone faced' : 'No opponents yet') + '</div>') + '</div></div></section>';
+  h += '<section class="card stack"><h3 class="tape">Points per game</h3>' + trendChart(r) + '</section>';
+  h += '<section class="card stack"><h3 class="tape">How ' + esc(p.name) + ' scores</h3>' + mixChart([r], true) + '</section>';
+  h += '<section class="stack"><h3 class="tape">Last ' + (d.last.length === 1 ? 'game' : d.last.length + ' games') + '</h3><ul class="pgames" id="profile-games">' + d.last.map(x =>
+    '<li><button type="button" class="pg" id="pg-' + esc(x.id) + '" data-act="histgo" data-v="' + esc(x.id) + '" aria-label="' + (x.won ? 'Won' : 'Lost') + ' ' + x.sf + ' to ' + x.sa + (x.mate ? ' with ' + esc(pname(x.mate)) : '') + ' against ' + esc(x.vs) + ', ' + esc(fdate(x.at)) + '. Open the toss log">' +
+    '<span class="wl ' + (x.won ? 'w' : 'l') + '" aria-hidden="true">' + (x.won ? 'W' : 'L') + '</span><span class="pgt"><b>' + (x.mate ? 'With ' + esc(pname(x.mate)) + ' ' : '') + 'vs ' + esc(x.vs) + '</b><span class="small muted num">' + esc(fdate(x.at)) + ' &middot; ' + x.pts + ' pt' + (x.pts === 1 ? '' : 's') + ' scored</span></span>' +
+    '<span class="fs num">' + x.sf + '&ndash;' + x.sa + '</span></button></li>').join('') + '</ul><p class="small onwood">Tap a game for its toss log.</p></section>';
+  return h;
+}
+
 /* Head-to-head card on Stats: two players (or two duos), picked with selects whose values are the stable ids. */
 function h2hView(s) {
   const H = ui.h2h, ps = s.rows.filter(r => r.g).sort((a, b) => a.name.localeCompare(b.name) || (a.id < b.id ? -1 : 1));
@@ -990,9 +1048,9 @@ function statsView() {
   const top = (k, min) => s.rows.filter(r => !min || r.toss >= min).sort((a, b) => b[k] - a[k] || b.g - a.g)[0];
   const tw = top('w'), tp = top('ppt', 1), ts = top('sink'), tc = top('ctch'), th = s.rows.filter(r => r.ch >= MIN_CHANCES).sort((a, b) => b.cpct - a.cpct || b.ch - a.ch)[0];
   const tile = (k, v, sub) => '<div class="tile"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s num">' + sub + '</div></div>';
-  h += '<div class="tiles">' + tile('Most wins', esc(tw.name), tw.w + ' of ' + tw.g + ' games') + (tp ? tile('Best arm', esc(tp.name), tp.ppt.toFixed(2) + ' pts per toss') : '') +
-    (ts && ts.sink ? tile('Sink leader', esc(ts.name), ts.sink + ' sink' + (ts.sink === 1 ? '' : 's')) : tile('Sinks', '0', 'Nobody has sunk one yet')) +
-    (th ? tile('Best hands', esc(th.name), Math.round(th.cpct * 100) + '% caught') : tc && tc.ctch ? tile('Best hands', esc(tc.name), tc.ctch + ' catch' + (tc.ctch === 1 ? '' : 'es')) : tile('Games', String(s.tot.g), s.tot.toss + ' tosses logged')) + '</div>';
+  h += '<div class="tiles">' + tile('Most wins', plink(tw.id), tw.w + ' of ' + tw.g + ' games') + (tp ? tile('Best arm', plink(tp.id), tp.ppt.toFixed(2) + ' pts per toss') : '') +
+    (ts && ts.sink ? tile('Sink leader', plink(ts.id), ts.sink + ' sink' + (ts.sink === 1 ? '' : 's')) : tile('Sinks', '0', 'Nobody has sunk one yet')) +
+    (th ? tile('Best hands', plink(th.id), Math.round(th.cpct * 100) + '% caught') : tc && tc.ctch ? tile('Best hands', plink(tc.id), tc.ctch + ' catch' + (tc.ctch === 1 ? '' : 'es')) : tile('Games', String(s.tot.g), s.tot.toss + ' tosses logged')) + '</div>';
   const withGames = s.rows.filter(r => r.trend.length).sort((a, b) => a.name.localeCompare(b.name));
   if (withGames.length) {
     const mineId = myPlayerId(), cur = withGames.filter(r => r.id === ui.trend)[0] || withGames.filter(r => r.id === mineId)[0] || withGames.filter(r => r.id === tw.id)[0] || withGames[0];
@@ -1005,10 +1063,10 @@ function statsView() {
   s.rows.sort((a, b) => { const d = k === 'name' ? a.name.localeCompare(b.name) : a[k] - b[k]; return d * dir || b.w - a.w || a.name.localeCompare(b.name); });
   h += '<section class="stack"><h3 class="tape">Players &middot; tap a column to sort</h3><div class="scroll"><table><thead><tr>' + COLS.map(c =>
     '<th scope="col"' + (k === c[0] ? ' aria-sort="' + (dir < 0 ? 'descending' : 'ascending') + '"' : '') + '><button type="button" id="sort-' + c[0] + '" data-act="sort" data-v="' + c[0] + '" title="' + c[2] + '" aria-label="Sort by ' + c[2] + '">' + c[1] + '</button></th>').join('') +
-    '</tr></thead><tbody>' + s.rows.map(r => '<tr>' + COLS.map(c => '<td' + (k === c[0] ? ' class="hi"' : '') + '>' + (c[0] === 'name' ? pmark(r.id) : '') + fmt(c[0], r[c[0]]) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' +
+    '</tr></thead><tbody>' + s.rows.map(r => '<tr>' + COLS.map(c => '<td' + (k === c[0] ? ' class="hi"' : '') + '>' + (c[0] === 'name' ? pmark(r.id) + plink(r.id) : fmt(c[0], r[c[0]])) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' +
     '<p class="small onwood">Finished games only. Points count what a player scored on their own tosses (a redemption shot counts in full). Strk = current streak (W3 = won the last 3, L2 = lost the last 2); Best W = longest win streak. Rdm = redemption tosses that scored. Drops = points scored on a player; Catch% = catches out of catches + drops (points logged without a defender are ignored).</p></section>';
   h += '<section class="stack"><h3 class="tape">Best duos</h3><div class="scroll"><table><thead><tr><th scope="col"><button type="button" disabled>Duo</button></th><th scope="col"><button type="button" disabled>W&ndash;L</button></th><th scope="col"><button type="button" disabled>Win%</button></th><th scope="col"><button type="button" disabled>Pt diff</button></th><th scope="col"><button type="button" disabled title="Comebacks: games won after having to redeem">Cmbk</button></th></tr></thead><tbody>' +
-    s.duos.slice(0, 10).map(d => { const df = d.pf - d.pa; return '<tr><td style="max-width:190px">' + esc(d.ids.map(pname).join(' & ')) + '</td><td>' + d.w + '&ndash;' + (d.g - d.w) + '</td><td>' + Math.round(d.pct * 100) + '%</td><td>' + (df > 0 ? '+' : '') + df + '</td><td>' + d.cb + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
+    s.duos.slice(0, 10).map(d => { const df = d.pf - d.pa; return '<tr><td style="max-width:190px">' + d.ids.map(plink).join(' &amp; ') + '</td><td>' + d.w + '&ndash;' + (d.g - d.w) + '</td><td>' + Math.round(d.pct * 100) + '%</td><td>' + (df > 0 ? '+' : '') + df + '</td><td>' + d.cb + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
   const r = s.rec, rl = (k2, x, unit) => (x ? tile(k2, x.v + ' ' + unit, esc(x.who) + ' &middot; ' + fdate(x.g.endedAt)) : '');
   const rh = rl('Most sinks in a game', r.sinks, 'sinks') + rl('Most points in a game', r.pts, 'pts') + rl('Biggest comeback', r.comeback, 'down') + rl('Longest game', r.long, 'tosses');
   if (rh) h += '<section class="stack"><h3 class="tape">Records</h3><div class="tiles two">' + rh + '</div></section>';
@@ -1024,7 +1082,8 @@ function historyView() {
       '<span class="small muted" style="grid-column:1/-1">' + (String(g.label || '').trim() ? esc(String(g.label).trim()) + ' &middot; ' : '') + fdate(g.endedAt) + ' &middot; ' + c.tosses + ' tosses' + (g.called ? ' &middot; called early' : '') + '</span></button>';
     if (open) {
       const st = g.settings;
-      li += '<div class="detail stack"><p class="small muted">' + ruleText(st) + ' &middot; tinks ' + (st.tinks ? 'on' : 'off') + ' &middot; field goals ' + (st.fieldGoals ? 'on' : 'off') + ' &middot; FIFA ' + st.fifa + ' &middot; ' + esc(tname(g, g.firstToss || 'A')) + ' tossed first</p>' + feed(g) +
+      li += '<div class="detail stack"><p class="small muted">' + ruleText(st) + ' &middot; tinks ' + (st.tinks ? 'on' : 'off') + ' &middot; field goals ' + (st.fieldGoals ? 'on' : 'off') + ' &middot; FIFA ' + st.fifa + ' &middot; ' + esc(tname(g, g.firstToss || 'A')) + ' tossed first</p>' +
+        '<p class="small hist-players"><b>Players:</b> ' + g.teamA.concat(g.teamB).map(plink).join(' ') + '</p>' + feed(g) +
         (ui.confirmDel === g.id ? '<div class="confirm"><b>Delete this game and its stats?</b><button type="button" class="btn danger block" data-act="delyes" data-v="' + g.id + '">Delete game</button><button type="button" class="btn ghost block" data-act="delno">Keep it</button></div>'
           : canDelete(g) ? '<button type="button" class="btn sm ghost danger" data-act="delask" data-v="' + g.id + '">Delete game</button>' : '<p class="small muted">Only the person who logged this game or a league admin can delete it.</p>') + '</div>';
     }
@@ -1078,7 +1137,7 @@ function playersView() {
   return h + '<div class="card"><ul class="plist">' + ids.map(id => {
     if (ui.rename === id) return '<li><form class="row" style="flex:1" data-form="rename" data-v="' + id + '"><input type="text" id="rename-input" maxlength="24" autocomplete="off" aria-label="Rename ' + esc(pname(id)) + '" value="' + esc(ui.drafts['rename-input'] != null ? ui.drafts['rename-input'] : pname(id)) + '"><button class="btn sm primary" type="submit" id="rename-save">Save</button><button class="btn sm ghost" type="button" data-act="renameno">Cancel</button></form></li>';
     const p = S.players[id], who = cl ? (p.uid ? ' &middot; ' + (p.uid === me() ? 'you' : 'verified') : ' &middot; guest') : '';
-    return '<li>' + pmark(id) + '<span class="nm">' + esc(pname(id)) + '<br><span class="small muted num" style="font-weight:400">' + (used[id] || 0) + ' game' + (used[id] === 1 ? '' : 's') + who + '</span></span><button type="button" class="btn sm" data-act="rename" data-v="' + id + '" aria-label="Rename ' + esc(pname(id)) + '">Rename</button>' +
+    return '<li>' + pmark(id) + '<span class="nm">' + plink(id) + '<br><span class="small muted num" style="font-weight:400">' + (used[id] || 0) + ' game' + (used[id] === 1 ? '' : 's') + who + '</span></span><button type="button" class="btn sm" data-act="rename" data-v="' + id + '" aria-label="Rename ' + esc(pname(id)) + '">Rename</button>' +
       (cl && adm ? '<button type="button" class="btn sm" data-act="more" data-v="' + id + '" aria-expanded="' + (ui.more === id ? 'true' : 'false') + '" aria-label="Link or merge ' + esc(pname(id)) + '">' + (ui.more === id ? 'Done' : 'Manage') + '</button>' : '') +
       (used[id] || (cl && (adm || p.uid)) ? '' : '<button type="button" class="btn sm ghost danger" data-act="rmplayer" data-v="' + id + '" aria-label="Remove ' + esc(pname(id)) + '">Remove</button>') + '</li>' +
       (cl && adm && ui.more === id ? playerMore(id, !used[id]) : ''); }).join('') + '</ul></div>' +
@@ -1201,7 +1260,8 @@ function render() {
   chipEl.setAttribute('aria-label', (S.mode === 'cloud' ? 'League ' + S.code : 'Local mode') + ', ' + sy.t + '. Open menu');
   const nReq = S.mode === 'cloud' && isAdmin() ? Object.keys(S.members).filter(u => S.members[u].status !== 'approved').length : 0, badge = document.getElementById('members-badge');
   if (badge) { badge.hidden = !nReq; badge.textContent = nReq ? String(nReq) : ''; badge.setAttribute('aria-label', nReq + ' join request' + (nReq === 1 ? '' : 's')); }
-  document.querySelectorAll('#tabs a').forEach(el => { if (el.dataset.tab === ui.tab) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
+  const onTab = ui.tab === 'player' ? ui.from : ui.tab;
+  document.querySelectorAll('#tabs a').forEach(el => { if (el.dataset.tab === onTab) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
   const loading = S.mode === 'loading' || (S.mode === 'cloud' && !(S.got.players && S.got.games));
   let cur = null;
   if (loading) view.innerHTML = '<div class="empty">' + die(6, 'big') + '<p>Setting the table&hellip;</p></div>';
@@ -1215,7 +1275,7 @@ function render() {
     cur = shownGame();
     const nLive = liveGames().length;
     if (ui.setupOpen || (ui.pick && nLive > 1)) cur = null; // the new-game screen or the picker is up instead of the game
-    view.innerHTML = ui.tab === 'stats' ? statsView() : ui.tab === 'history' ? historyView() : ui.tab === 'players' ? playersView()
+    view.innerHTML = ui.tab === 'player' ? profileView() : ui.tab === 'stats' ? statsView() : ui.tab === 'history' ? historyView() : ui.tab === 'players' ? playersView()
       : ui.setupOpen ? setupView() : cur ? (cur.status === 'live' ? liveView(cur) : finishedView(cur)) : nLive > 1 ? pickerView() : setupView();
   }
   sheet.innerHTML = ui.menu && inApp ? menuView() : '';
@@ -1293,6 +1353,10 @@ const ACT = {
     put('games', id, ng);
     window.scrollTo(0, 0); },
   sort: v => { if (ui.sort.k === v) ui.sort.dir = -ui.sort.dir; else ui.sort = { k: v, dir: v === 'name' ? 1 : -1 }; render(); },
+  profile: v => { if (!S.players[v]) return; ui.profile = v; ssSet(SS_PROFILE, v); ui.chartSel = null; ui.menu = false;
+    if (ui.tab !== 'player') { ui.from = TABS.indexOf(ui.tab) >= 0 ? ui.tab : 'stats'; ui.backScroll = window.scrollY; location.hash = '#player'; } else { render(); window.scrollTo(0, 0); const el = document.getElementById('profile-back'); if (el) el.focus({ preventScroll: true }); } },
+  profileback: () => { location.hash = '#' + (ui.from || 'stats'); },
+  histgo: v => { if (!S.games[v]) return; ui.open = v; ui.confirmDel = null; ui.scrollTo = 'hist-' + v; ui.backScroll = null; location.hash = '#history'; },
   h2hmode: v => { ui.h2h.mode = v === 'd' ? 'd' : 'p'; render(); },
   trend: v => { ui.trend = v; ui.chartSel = null; render(); },
   pt: v => { ui.chartSel = Number(v); render(); },
@@ -1360,12 +1424,25 @@ document.addEventListener('submit', e => {
   else if (k === 'rename') { const id = f.dataset.v, p = S.players[id], d = ui.drafts['rename-input'], nm = (d == null ? '' : d).trim().slice(0, 24); ui.rename = null; ui.drafts['rename-input'] = null;
     if (p && nm && nm !== p.name) put('players', id, Object.assign({}, p, { name: nm })); else render(); }
 });
-const hashTab = () => { const t = (location.hash || '').replace('#', ''); return TABS.indexOf(t) >= 0 ? t : 'game'; };
-window.addEventListener('hashchange', () => { ui.tab = hashTab(); fxEl.innerHTML = ''; render(); window.scrollTo(0, 0); });
+const VIEWS = ['player']; // routed like tabs, but not on the tab bar
+const hashTab = () => { const t = (location.hash || '').replace('#', ''); return TABS.indexOf(t) >= 0 || VIEWS.indexOf(t) >= 0 ? t : 'game'; };
+window.addEventListener('hashchange', () => {
+  const prev = ui.tab; ui.tab = hashTab(); fxEl.innerHTML = '';
+  if (ui.tab === 'player' && prev !== 'player') ui.chartSel = null;
+  if (prev === 'player' && ui.tab !== 'player') ui.chartSel = null;
+  render();
+  // leaving a profile for the tab it was opened from puts the page back where it was; a game opened from a profile is scrolled to
+  const y = prev === 'player' && ui.tab === ui.from ? ui.backScroll : null, to = ui.scrollTo ? document.getElementById(ui.scrollTo) : null;
+  if (ui.tab !== 'player') ui.backScroll = null;
+  ui.scrollTo = null;
+  if (to) { to.scrollIntoView({ block: 'start' }); window.scrollBy(0, -12); try { to.focus({ preventScroll: true }); } catch (e) {} }
+  else { window.scrollTo(0, y || 0); if (ui.tab === 'player') { const el = document.getElementById('profile-back'); if (el) el.focus({ preventScroll: true }); } }
+});
 window.addEventListener('storage', e => { if (e.key === LS && S.mode === 'local') { Object.assign(S, lsRead()); render(); } });
 document.getElementById('brand-die').innerHTML = die(5);
 applyTheme();
 ui.tab = hashTab();
+ui.profile = ssGet(SS_PROFILE);
 boot();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(r => { r.update().catch(() => {}); }).catch(() => {});
   // when a new version takes over, reload once so the update shows right away (skipped on the very first install)

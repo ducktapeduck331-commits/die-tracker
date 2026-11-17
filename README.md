@@ -47,6 +47,11 @@ Stats add **Rdm** (a player's redemption tosses that scored) and **Cmbk** (a duo
 - The **Head-to-head** card on Stats compares two players (record against each other, their record as partners, points in
   those games, last 5 meetings) or two duos.
 
+### Player profiles
+Tap a player's name (leaderboard, best hands, duos, an opened game in History, the Players tab) to open their page:
+record, streaks, offense and defense numbers, best partner (best win % with 3+ games together), toughest opponent
+(most losses against), points-per-game chart, scoring mix and their last 10 games. Tap a game there for its toss log.
+
 ### Export and backups
 The free Firebase plan keeps no backups. Owners and admins (anyone, without Firebase) can open the menu and use
 **Export stats** to download `players.csv` (every stat per player), `games.csv` (one row per finished game) and a full

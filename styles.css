@@ -487,3 +487,39 @@ select{font:inherit;color:var(--ink);min-height:52px;padding:8px 34px 8px 12px;b
 .meets .mt{min-width:0;overflow-wrap:anywhere}
 .meets .mt .w{font-weight:800}
 .meets .mw{font-size:13px;font-weight:700;color:var(--muted);text-align:right;max-width:38vw;overflow-wrap:anywhere}
+
+/* player names that open a profile */
+.plink{background:none;border:0;margin:-6px 0;padding:6px 0;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit;text-align:inherit;line-height:inherit;cursor:pointer;
+  text-decoration:underline;text-decoration-style:dotted;text-decoration-thickness:1.5px;text-underline-offset:3px;text-decoration-color:color-mix(in srgb,currentColor 55%,transparent);
+  max-width:100%;overflow-wrap:anywhere;border-radius:4px}
+.plink:hover{text-decoration-style:solid}
+.plink:focus-visible{outline:3px solid var(--focus);outline-offset:1px}
+td .plink,.mixrow .plink,.hands .plink{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;outline-offset:-3px}
+td:first-child .plink{max-width:calc(100% - 26px)}
+.mixrow .plink,.hands .plink{display:inline-block;max-width:100%;margin:0;padding:2px 0}
+.hands .nm:has(.av) .plink{max-width:calc(100% - 26px)}
+.hist-players .plink{margin-right:10px;font-weight:700}
+
+/* player profile */
+.backbtn{justify-self:start}
+.profile-head{display:grid;justify-items:center;text-align:center;gap:6px;border-color:var(--navy);box-shadow:0 4px 0 var(--gold)}
+.profile-head h2{overflow-wrap:anywhere;font-size:34px}
+.profile-head .ring{padding:6px 0 4px}
+.av.xl.guest{border:4px dashed var(--muted);box-shadow:none;color:var(--muted)}
+.av.xl.ok{box-shadow:0 0 0 3px var(--gold),0 6px 0 3px color-mix(in srgb,var(--edge) 45%,transparent)}
+.pairs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pair{background:var(--surface2);border-radius:12px;padding:10px 12px;min-width:0}
+.pair .k{font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.pair .v{font-family:var(--display);font-size:26px;line-height:1.15;text-transform:uppercase;overflow-wrap:anywhere}
+.pair .s{font-size:13px;color:var(--muted)}
+.pgames{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.pg{width:100%;text-align:left;background:var(--surface);color:var(--ink);border:2px solid var(--edge);border-radius:14px;padding:10px 12px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;
+  box-shadow:0 3px 0 color-mix(in srgb,var(--edge) 55%,transparent);font:inherit}
+.pg:active{transform:translateY(2px)}
+.pg .wl{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-family:var(--display);font-size:18px;border:2.5px solid var(--s1)}
+.pg .wl.w{background:var(--s1);color:#fff}
+.pg .wl.l{color:var(--ink)}
+.pg .pgt{display:grid;min-width:0;line-height:1.25}
+.pg .pgt b{overflow-wrap:anywhere;font-size:15px}
+.pg .fs{font-family:var(--display);font-size:26px;white-space:nowrap}
+@media (max-width:374px){.pairs{grid-template-columns:1fr}}

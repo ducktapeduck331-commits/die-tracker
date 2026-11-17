@@ -27,10 +27,6 @@ How the app works (read before changing anything):
 - Store the season on each game (name or id plus start date). Games logged before seasons existed count
   as the first season.
 
-### 10. Player profile pages
-- Tap a player's name anywhere to open their page: all their stats (offense and defense), win %, streaks,
-  best partner (duo with the best record), toughest opponent, recent games, and charts.
-
 ### 11. Live scoreboard view
 - A big read-only scoreboard for spectators: team names, scores, redemption banner, last few tosses,
   no buttons. Meant for a TV or a propped-up phone. Updates live from Firestore.
