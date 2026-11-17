@@ -17,9 +17,8 @@ How the app works (read before changing anything):
 
 ### Rename "Re-toss" to "Die Don't Lie"
 - Change the button label (and the toss-log text) from "Re-toss" to **"Die Don't Lie"**.
-- Behaviour stays the same unless the owner says otherwise: it records a disputed toss that is thrown again and
-  doesn't count as a toss. Keep the stored event kind `retoss` so old games still replay.
-- Ask the owner whether "Die Don't Lie" should also change how the toss is scored before building.
+- **Name change only** (confirmed by the owner): behaviour stays exactly the same. It records a disputed toss
+  that is thrown again and doesn't count as a toss. Keep the stored event kind `retoss` so old games still replay.
 
 ### FIFA: keep only "FIFA catch"
 - Remove the FIFA outcomes **FIFA'd onto table and dropped**, **FIFA'd off cup to ground**,
