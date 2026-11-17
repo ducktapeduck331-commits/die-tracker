@@ -20,7 +20,7 @@ It is a plain static site: no build step, no server. Open `index.html` from any 
 Reaching the target (12 by default) does not end the game. The **other** team gets a **redemption round**:
 
 - **2 tosses, one by each player.** The app picks the thrower (teammate 1, then teammate 2); you can swap the order,
-  but nobody throws twice. Both tosses are always taken, even if the first one works. A re-toss doesn't use one up.
+  but nobody throws twice. Both tosses are always taken, even if the first one works. A Die Don't Lie (re-toss) doesn't use one up.
 - **A redemption shot knocks the leader down first**, but never below target − 1 (11). Points left over are added to the
   redeeming team. With a target of 12: `12-9` + point → `11-9`, then another point → `11-10`. `14-9` + sink → `11-9`.
   `14-9` + point → `13-9`. `12-11` + sink → `11-13`.

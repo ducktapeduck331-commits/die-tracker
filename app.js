@@ -23,7 +23,7 @@ function die(n, cls) {
   for (let i = 0; i < 9; i++) h += '<i' + (PIPS[n].indexOf(i) >= 0 ? ' class="on"' : '') + '></i>';
   return '<span class="die ' + (cls || '') + '" role="img" aria-label="Die showing ' + n + '">' + h + '</span>';
 }
-const KIND = { point: 'Point', tink: 'Tink', sink: 'Sink', fg: 'Field goal', caught: 'Caught', short: 'Short / dead', low: 'Too low', retoss: 'Re-toss', selfSink: 'Self-sink',
+const KIND = { point: 'Point', tink: 'Tink', sink: 'Sink', fg: 'Field goal', caught: 'Caught', short: 'Short / dead', low: 'Too low', retoss: 'Die Don\'t Lie', selfSink: 'Self-sink',
   fifaCatch: 'FIFA catch', fifaDrop: "FIFA'd onto table, dropped", fifaTink: "FIFA'd off cup to ground", fifaSink: "FIFA'd into defending cup", fifaOwn: "FIFA'd into offensive cup" };
 const REASON = { dropped: 'Dropped', twohand: 'Two-handed catch', trapped: 'Trapped', bobble: 'Bobble touched table' };
 const REASON_SHORT = { dropped: 'Dropped', twohand: 'Two-handed', trapped: 'Trapped', bobble: 'Bobble' };
@@ -712,7 +712,7 @@ function liveView(g) {
     (st.tinks ? out('tink', 'Tink!', 'Off the cup, uncaught', 2, 'score') : '') +
     (st.fieldGoals ? out('fg', 'Field goal', 'Back through own cups', 2, 'score' + (st.tinks ? ' wide' : '')) : '') +
     '</div><div class="outs">' +
-    out('caught', 'Caught', 'One-hand catch') + out('short', 'Short / dead', 'Own side or on the line') + out('low', 'Too low', 'Below height') + out('retoss', 'Re-toss', 'Disputed, throw again') +
+    out('caught', 'Caught', 'One-hand catch') + out('short', 'Short / dead', 'Own side or on the line') + out('low', 'Too low', 'Below height') + out('retoss', 'Die Don\'t Lie', 'Disputed, throw again') +
     (st.fifa !== 'off' && !ti.red ? out('fifa', 'FIFA!', 'Kicked back into play') : '') + out('selfSink', 'Self-sink', st.selfSinkLoss ? 'Automatic loss' : 'Own or partner\'s cup', 0, 'bad') + '</div></section>';
   h += '<section class="card stack"><div class="spread"><h3 class="tape">Recent tosses</h3><button type="button" class="btn sm" id="undo-last" data-act="undo"' + (g.events.length ? '' : ' disabled') + '>Undo last</button></div>' + feed(g, 8) + '</section>';
   if (ui.confirmEnd) {
