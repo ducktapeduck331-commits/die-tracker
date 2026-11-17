@@ -435,3 +435,14 @@ nav.tabs a{position:relative}
 .tab-badge{position:absolute;top:7px;left:calc(50% + 9px);min-width:20px;height:20px;padding:0 5px;border-radius:10px;display:grid;place-items:center;background:var(--gold);color:var(--navy-deep);
   font-size:12px;font-weight:800;line-height:1;font-style:normal;box-shadow:0 0 0 2px var(--bar)}
 .tab-badge[hidden]{display:none}
+
+/* defense stats */
+.d-dropped{--c:var(--s1)} .d-twohand{--c:var(--s2)} .d-trapped{--c:var(--s3)} .d-bobble{--c:var(--s4)}
+.hands{list-style:none;margin:0;padding:0;display:grid}
+.hands li{display:grid;grid-template-columns:22px minmax(0,1fr) auto 48px;gap:8px;align-items:center;padding:9px 0;border-top:1px solid var(--line)}
+.hands li:first-child{border-top:0;padding-top:2px}
+.hands .rk{font-family:var(--display);font-size:18px;color:var(--muted);text-align:center}
+.hands .nm{font-weight:700;font-size:15.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hands .cd{font-size:13px;color:var(--muted);white-space:nowrap}
+.hands .pc{font-family:var(--display);font-weight:400;font-size:22px;text-align:right}
+.mystats .ms:nth-child(9):nth-last-child(2),.mystats .ms:nth-child(10):last-child{grid-column:span 2}

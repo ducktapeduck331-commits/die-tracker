@@ -26,6 +26,8 @@ function die(n, cls) {
 const KIND = { point: 'Point', tink: 'Tink', sink: 'Sink', fg: 'Field goal', caught: 'Caught', short: 'Short / dead', low: 'Too low', retoss: 'Re-toss', selfSink: 'Self-sink',
   fifaCatch: 'FIFA catch', fifaDrop: "FIFA'd onto table, dropped", fifaTink: "FIFA'd off cup to ground", fifaSink: "FIFA'd into defending cup", fifaOwn: "FIFA'd into offensive cup" };
 const REASON = { dropped: 'Dropped', twohand: 'Two-handed catch', trapped: 'Trapped', bobble: 'Bobble touched table' };
+const REASON_SHORT = { dropped: 'Dropped', twohand: 'Two-handed', trapped: 'Trapped', bobble: 'Bobble' };
+const MIN_CHANCES = 5; // catches + drops needed to rank on the Best hands board
 const TABS = ['game', 'stats', 'history', 'players'];
 const CODE_RE = /^[A-Z0-9-]{4,32}$/;
 const LS = 'beerdie.v1', LS_LEAGUE = 'beerdie.league', LS_THEME = 'beerdie.theme';
@@ -467,6 +469,7 @@ function logEvent(kind, extra) {
   const g = liveGame(); if (!g) return;
   const ti = tossInfo(g), pf = pointsFor(kind, g, ti.team);
   if (ti.red && kind.indexOf('fifa') === 0) return; // no FIFA in redemption
+  if (kind === 'point' && !(extra && g['team' + opp(ti.team)].indexOf(extra.defender) >= 0)) return; // a point is always on one of the two defenders
   const ev = Object.assign({ t: Date.now(), kind: kind, thrower: ti.thr, team: ti.team, points: pf.points, scoreTeam: pf.to || null }, extra || {});
   if (ti.red) { // points stays the shot's value; knock/add record how it was split (for the log; the replay recomputes it)
     ev.redemption = true;
@@ -497,7 +500,7 @@ function mixKey(e) { return e.fifa ? 'fifa' : e.kind === 'tink' ? 'tink' : e.kin
 function computeStats() {
   const P = {}, D = {}, fs = finals(), tot = { g: fs.length, toss: 0, sink: 0, pts: 0 };
   const rec = { sinks: null, pts: null, comeback: null, long: null };
-  const en = id => P[id] || (P[id] = { id: id, name: pname(id), g: 0, w: 0, toss: 0, pts: 0, tink: 0, sink: 0, fg: 0, ctch: 0, miss: 0, fifa: 0, ss: 0, red: 0, mix: { pt: 0, tink: 0, sink: 0, fg: 0, fifa: 0 }, trend: [] });
+  const en = id => P[id] || (P[id] = { id: id, name: pname(id), g: 0, w: 0, toss: 0, pts: 0, tink: 0, sink: 0, fg: 0, ctch: 0, drop: 0, dr: { dropped: 0, twohand: 0, trapped: 0, bobble: 0 }, miss: 0, fifa: 0, ss: 0, red: 0, mix: { pt: 0, tink: 0, sink: 0, fg: 0, fifa: 0 }, trend: [] });
   fs.forEach(g => {
     const c = calc(g), per = {};
     ['A', 'B'].forEach(t => {
@@ -517,6 +520,7 @@ function computeStats() {
       else if (e.kind === 'short' || e.kind === 'low') p.miss++;
       else if (e.kind === 'selfSink') p.ss++;
       else if (e.kind === 'caught' && e.defender) en(e.defender).ctch++;
+      else if (e.kind === 'point' && e.defender) { const dp = en(e.defender); dp.drop++; dp.dr[REASON[e.reason] ? e.reason : 'dropped']++; } // any uncaught point on a defender is a drop; untagged points count against nobody
       else if (e.kind === 'fifaCatch' && e.defender) en(e.defender).fifa++;
     });
     Object.keys(per).forEach(id => {
@@ -527,14 +531,14 @@ function computeStats() {
     if (g.winner && c.maxDef[g.winner] > 0 && (!rec.comeback || c.maxDef[g.winner] > rec.comeback.v)) rec.comeback = { v: c.maxDef[g.winner], who: tname(g, g.winner), g: g };
     if (!rec.long || c.tosses > rec.long.v) rec.long = { v: c.tosses, who: tname(g, 'A') + ' vs ' + tname(g, 'B'), g: g };
   });
-  const rows = Object.keys(P).map(id => { const p = P[id]; p.pct = p.g ? p.w / p.g : 0; p.ppt = p.toss ? p.pts / p.toss : 0; p.ppg = p.g ? p.pts / p.g : 0; p.trend.sort((a, b) => a.at - b.at); return p; });
+  const rows = Object.keys(P).map(id => { const p = P[id]; p.pct = p.g ? p.w / p.g : 0; p.ppt = p.toss ? p.pts / p.toss : 0; p.ppg = p.g ? p.pts / p.g : 0; p.ch = p.ctch + p.drop; p.cpct = p.ch ? p.ctch / p.ch : -1; p.trend.sort((a, b) => a.at - b.at); return p; });
   const duos = Object.keys(D).map(k => { const d = D[k]; d.pct = d.w / d.g; return d; }).sort((a, b) => b.pct - a.pct || b.w - a.w || (b.pf - b.pa) - (a.pf - a.pa));
   return { rows: rows, duos: duos, rec: rec, tot: tot };
 }
 const COLS = [['name', 'Player', 'Player'], ['g', 'GP', 'Games played'], ['w', 'W', 'Wins'], ['pct', 'Win%', 'Win percentage'], ['toss', 'Toss', 'Tosses'], ['pts', 'Pts', 'Points scored'],
-  ['ppt', 'P/Toss', 'Points per toss'], ['ppg', 'P/Game', 'Points per game'], ['tink', 'Tink', 'Tinks'], ['sink', 'Sink', 'Sinks'], ['fg', 'FG', 'Field goals'], ['ctch', 'Catch', 'One-hand catches'],
+  ['ppt', 'P/Toss', 'Points per toss'], ['ppg', 'P/Game', 'Points per game'], ['tink', 'Tink', 'Tinks'], ['sink', 'Sink', 'Sinks'], ['fg', 'FG', 'Field goals'], ['ctch', 'Catch', 'One-hand catches'], ['drop', 'Drops', 'Drops: points scored on this defender'], ['cpct', 'Catch%', 'Catch percentage: catches out of catches plus drops'],
   ['miss', 'Shrt/Low', 'Short and too-low tosses'], ['fifa', 'FIFA', 'FIFA catches'], ['ss', 'Self', 'Self-sinks'], ['red', 'Rdm', 'Redemptions: redemption tosses that scored']];
-function fmt(k, v) { return k === 'pct' ? Math.round(v * 100) + '%' : k === 'ppt' ? v.toFixed(2) : k === 'ppg' ? v.toFixed(1) : k === 'name' ? esc(v) : String(v); }
+function fmt(k, v) { return k === 'cpct' ? (v < 0 ? '&mdash;' : Math.round(v * 100) + '%') : k === 'pct' ? Math.round(v * 100) + '%' : k === 'ppt' ? v.toFixed(2) : k === 'ppg' ? v.toFixed(1) : k === 'name' ? esc(v) : String(v); }
 function fdate(t) { if (!t) return ''; try { return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (e) { return ''; } }
 
 /* ---------- charts (inline SVG) ---------- */
@@ -578,13 +582,43 @@ function mixChart(rows) {
   return h + '</div><p class="small muted">Points each player scored on their own tosses, by how they got them.</p>';
 }
 
+function dropChart(rows) {
+  const rs = rows.filter(r => r.drop > 0).sort((a, b) => b.drop - a.drop || a.name.localeCompare(b.name));
+  if (!rs.length) return '<p class="muted small">No drops tagged yet.</p>';
+  const max = rs[0].drop, keys = Object.keys(REASON_SHORT);
+  let h = '<div class="legend">' + keys.map(k => '<span><i class="sw d-' + k + '"></i>' + REASON_SHORT[k] + '</span>').join('') + '</div><div class="mix">';
+  rs.forEach(r => {
+    let x = 0, bar = '';
+    keys.forEach(k => {
+      const v = r.dr[k]; if (!v) return; const w = v / max * 100;
+      bar += '<rect class="d-' + k + '" x="' + x.toFixed(2) + '%" y="1" width="' + w.toFixed(2) + '%" height="18" rx="4"><title>' + esc(r.name) + ' — ' + REASON_SHORT[k] + ': ' + v + '</title></rect>'; x += w;
+    });
+    const label = keys.filter(k => r.dr[k]).map(k => REASON_SHORT[k] + ' ' + r.dr[k]).join(', ');
+    h += '<div class="mixrow"><span class="nm">' + esc(r.name) + '</span><svg class="mixbar" height="20" role="img" aria-label="' + esc(r.name) + ': ' + r.drop + ' drop' + (r.drop === 1 ? '' : 's') + '. ' + esc(label) + '">' + bar + '</svg><span class="tot num">' + r.drop + '</span></div>';
+  });
+  return h + '</div>';
+}
+function defenseView(rows) {
+  const by = (a, b) => b.cpct - a.cpct || b.ch - a.ch || a.name.localeCompare(b.name);
+  const q = rows.filter(r => r.ch >= MIN_CHANCES).sort(by), nq = rows.filter(r => r.ch > 0 && r.ch < MIN_CHANCES).sort(by);
+  const n = (v, one, many) => v + ' ' + (v === 1 ? one : many);
+  let h = '<section class="card stack" id="defense"><h3 class="tape">Defense &middot; best hands</h3>';
+  if (!q.length && !nq.length) return h + '<p class="muted small">No catches or drops logged yet. Pick the defender when you log a Point and this fills in.</p></section>';
+  if (q.length) h += '<ol class="hands" id="best-hands">' + q.map((r, i) => '<li><span class="rk num">' + (i + 1) + '</span><span class="nm">' + pmark(r.id) + esc(r.name) + '</span><span class="cd num">' + n(r.ctch, 'catch', 'catches') + ' &middot; ' + n(r.drop, 'drop', 'drops') + '</span><b class="pc num">' + Math.round(r.cpct * 100) + '%</b></li>').join('') + '</ol>';
+  else h += '<p class="small muted">Nobody has ' + MIN_CHANCES + ' chances yet.</p>';
+  if (nq.length) h += '<p class="small muted num" id="hands-pending"><b>Not enough chances yet</b> (need ' + MIN_CHANCES + '): ' + nq.map(r => esc(r.name) + ' ' + r.ctch + ' of ' + r.ch).join(', ') + '</p>';
+  h += '<p class="small muted">Catch % = catches out of catches + drops.</p>';
+  return h + '<h3 class="tape">Drops by reason</h3>' + dropChart(rows) + '</section>';
+}
+
 /* ---------- views ---------- */
 function describe(e, step) {
   let s = '<b>' + esc(pname(e.thrower)) + '</b> &middot; ' + (step && step.red ? 'Redemption &middot; ' : '') + esc(KIND[e.kind] || e.kind);
   if (step && step.red && (step.knock || step.add)) s += ' <span class="muted num">&mdash; ' + step.before.A + '-' + step.before.B + ' &rarr; ' + step.after.A + '-' + step.after.B + '</span>';
-  if (e.reason && REASON[e.reason]) s += ' <span class="muted">(' + esc(REASON[e.reason].toLowerCase()) + ')</span>';
+  const why = e.reason && REASON_SHORT[e.reason] ? esc(REASON_SHORT[e.reason].toLowerCase()) : '';
+  if (why && !e.defender) s += ' <span class="muted">(' + why + ')</span>';
   if (e.cup === 'partner') s += ' <span class="muted">(partner\'s cup)</span>';
-  if (e.defender) s += ' <span class="muted">' + (e.kind === 'caught' || e.kind === 'fifaCatch' ? 'by ' : e.kind === 'sink' ? 'in the cup of ' : e.fifa ? 'FIFA by ' : 'on ') + esc(pname(e.defender)) + '</span>';
+  if (e.defender) s += ' <span class="muted">' + (e.kind === 'caught' || e.kind === 'fifaCatch' ? 'by ' : e.kind === 'sink' ? 'in the cup of ' : e.fifa ? 'FIFA by ' : 'on ') + esc(pname(e.defender)) + (why ? ' &middot; ' + why : '') + '</span>';
   if (e.fifa) s += '<span class="tag">FIFA</span>';
   if (e.capped) s += ' <span class="muted">(FIFA point cap reached)</span>';
   return s;
@@ -629,8 +663,10 @@ function panelView(g, ti) {
   const defChips = title => '<h3 class="tape">' + title + '</h3><div class="chips">' + defs.map(id => chip('defender', id, pname(id))).join('') + '</div>';
   const x = () => { const o = {}; if (p.defender) o.defender = p.defender; if (p.reason) o.reason = p.reason; return esc(JSON.stringify(o)); };
   if (p.kind === 'point') {
-    h = '<h2>Point</h2><button type="button" class="btn primary block big" id="panel-go" data-act="log" data-v="point" data-x="' + x() + '">Log point <span class="val">+1</span></button>' +
-      '<h3 class="tape">Why? (optional)</h3><div class="chips">' + Object.keys(REASON).map(k => chip('reason', k, REASON[k])).join('') + '</div>' + defChips('Who missed it? (optional)');
+    const why = REASON[p.reason] ? p.reason : 'dropped';
+    h = '<h2>Point</h2><h3 class="tape">How did it get down?</h3><div class="chips">' + Object.keys(REASON).map(k => chip('reason', k, REASON[k])).join('') + '</div>' +
+      '<h3 class="tape">Who was it on? Tap to log</h3><div class="stack" id="point-defenders">' + defs.map(id =>
+      '<button type="button" class="btn primary block big" data-act="log" data-v="point" data-x="' + esc(JSON.stringify({ defender: id, reason: why })) + '">On ' + esc(pname(id)) + ' <span class="val">+1</span></button>').join('') + '</div>';
   } else if (p.kind === 'sink') {
     h = '<h2>Sink!</h2><button type="button" class="btn cup block big" id="panel-go" data-act="log" data-v="sink" data-x="' + x() + '">Log sink <span class="val">+3</span></button>' + defChips('Whose cup? (optional)');
   } else if (p.kind === 'caught') {
@@ -729,30 +765,31 @@ function myStatsView(s) { // the signed-in person's own numbers, top of the Stat
   const rank = s.rows.slice().sort((a, b) => b.w - a.w || b.pct - a.pct || b.pts - a.pts).map(x => x.id).indexOf(pid) + 1;
   const c = (k, v) => '<div class="ms"><div class="v num">' + v + '</div><div class="k">' + k + '</div></div>';
   return '<section class="card stack mine" id="my-stats">' + head + '<div class="mystats">' + c('Record', r.w + '&ndash;' + (r.g - r.w)) + c('Win%', Math.round(r.pct * 100) + '%') + c('Points', r.pts) + c('Pts / toss', r.ppt.toFixed(2)) +
-    c('Sinks', r.sink) + c('Tinks', r.tink) + c('Catches', r.ctch) + c('Wins rank', '#' + rank) + '</div>' +
+    c('Sinks', r.sink) + c('Tinks', r.tink) + c('Wins rank', '#' + rank) + c('Catches', r.ctch) + c('Drops', r.drop) + c('Catch %', fmt('cpct', r.cpct)) + '</div>' +
     '<p class="small muted num">' + r.g + ' game' + (r.g === 1 ? '' : 's') + ' &middot; ' + r.toss + ' tosses &middot; ' + r.ppg.toFixed(1) + ' points per game</p></section>';
 }
 function statsView() {
   const s = computeStats(); let h = myStatsView(s) + '<h2>Leaderboard</h2>';
   if (!s.tot.g) return h + '<div class="empty">' + die(3, 'big') + '<p><b>No finished games yet</b></p><p class="muted small">Finish a game and the leaderboard fills in.</p></div>';
   const top = (k, min) => s.rows.filter(r => !min || r.toss >= min).sort((a, b) => b[k] - a[k] || b.g - a.g)[0];
-  const tw = top('w'), tp = top('ppt', 1), ts = top('sink'), tc = top('ctch');
+  const tw = top('w'), tp = top('ppt', 1), ts = top('sink'), tc = top('ctch'), th = s.rows.filter(r => r.ch >= MIN_CHANCES).sort((a, b) => b.cpct - a.cpct || b.ch - a.ch)[0];
   const tile = (k, v, sub) => '<div class="tile"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s num">' + sub + '</div></div>';
   h += '<div class="tiles">' + tile('Most wins', esc(tw.name), tw.w + ' of ' + tw.g + ' games') + (tp ? tile('Best arm', esc(tp.name), tp.ppt.toFixed(2) + ' pts per toss') : '') +
     (ts && ts.sink ? tile('Sink leader', esc(ts.name), ts.sink + ' sink' + (ts.sink === 1 ? '' : 's')) : tile('Sinks', '0', 'Nobody has sunk one yet')) +
-    (tc && tc.ctch ? tile('Best hands', esc(tc.name), tc.ctch + ' catch' + (tc.ctch === 1 ? '' : 'es')) : tile('Games', String(s.tot.g), s.tot.toss + ' tosses logged')) + '</div>';
+    (th ? tile('Best hands', esc(th.name), Math.round(th.cpct * 100) + '% caught') : tc && tc.ctch ? tile('Best hands', esc(tc.name), tc.ctch + ' catch' + (tc.ctch === 1 ? '' : 'es')) : tile('Games', String(s.tot.g), s.tot.toss + ' tosses logged')) + '</div>';
   const withGames = s.rows.filter(r => r.trend.length).sort((a, b) => a.name.localeCompare(b.name));
   if (withGames.length) {
     const mineId = myPlayerId(), cur = withGames.filter(r => r.id === ui.trend)[0] || withGames.filter(r => r.id === mineId)[0] || withGames.filter(r => r.id === tw.id)[0] || withGames[0];
     h += '<section class="card stack"><h3 class="tape">Points per game</h3><div class="chips scrollx">' + withGames.map(r => '<button type="button" class="chip" data-act="trend" data-v="' + r.id + '" aria-pressed="' + (r.id === cur.id ? 'true' : 'false') + '">' + esc(r.name) + '</button>').join('') + '</div>' + trendChart(cur) + '</section>';
   }
   h += '<section class="card stack"><h3 class="tape">How they score</h3>' + mixChart(s.rows) + '</section>';
+  h += defenseView(s.rows);
   const k = ui.sort.k, dir = ui.sort.dir;
   s.rows.sort((a, b) => { const d = k === 'name' ? a.name.localeCompare(b.name) : a[k] - b[k]; return d * dir || b.w - a.w || a.name.localeCompare(b.name); });
   h += '<section class="stack"><h3 class="tape">Players &middot; tap a column to sort</h3><div class="scroll"><table><thead><tr>' + COLS.map(c =>
     '<th scope="col"' + (k === c[0] ? ' aria-sort="' + (dir < 0 ? 'descending' : 'ascending') + '"' : '') + '><button type="button" id="sort-' + c[0] + '" data-act="sort" data-v="' + c[0] + '" title="' + c[2] + '" aria-label="Sort by ' + c[2] + '">' + c[1] + '</button></th>').join('') +
     '</tr></thead><tbody>' + s.rows.map(r => '<tr>' + COLS.map(c => '<td' + (k === c[0] ? ' class="hi"' : '') + '>' + (c[0] === 'name' ? pmark(r.id) : '') + fmt(c[0], r[c[0]]) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' +
-    '<p class="small onwood">Finished games only. Points count what a player scored on their own tosses (a redemption shot counts in full). Rdm = redemption tosses that scored.</p></section>';
+    '<p class="small onwood">Finished games only. Points count what a player scored on their own tosses (a redemption shot counts in full). Rdm = redemption tosses that scored. Drops = points scored on a player; Catch% = catches out of catches + drops (points logged without a defender are ignored).</p></section>';
   h += '<section class="stack"><h3 class="tape">Best duos</h3><div class="scroll"><table><thead><tr><th scope="col"><button type="button" disabled>Duo</button></th><th scope="col"><button type="button" disabled>W&ndash;L</button></th><th scope="col"><button type="button" disabled>Win%</button></th><th scope="col"><button type="button" disabled>Pt diff</button></th><th scope="col"><button type="button" disabled title="Comebacks: games won after having to redeem">Cmbk</button></th></tr></thead><tbody>' +
     s.duos.slice(0, 10).map(d => { const df = d.pf - d.pa; return '<tr><td style="max-width:190px">' + esc(d.ids.map(pname).join(' & ')) + '</td><td>' + d.w + '&ndash;' + (d.g - d.w) + '</td><td>' + Math.round(d.pct * 100) + '%</td><td>' + (df > 0 ? '+' : '') + df + '</td><td>' + d.cb + '</td></tr>'; }).join('') + '</tbody></table></div></section>';
   const r = s.rec, rl = (k2, x, unit) => (x ? tile(k2, x.v + ' ' + unit, esc(x.who) + ' &middot; ' + fdate(x.g.endedAt)) : '');
@@ -970,9 +1007,9 @@ async function copyText(t) {
   try { const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch (e) { return false; }
 }
 const ACT = {
-  out: v => { if (v === 'point' || v === 'sink' || v === 'caught' || v === 'selfSink' || v === 'fifa') { ui.panel = { kind: v }; buzz(8); render(); } else logEvent(v); },
+  out: v => { if (v === 'point' || v === 'sink' || v === 'caught' || v === 'selfSink' || v === 'fifa') { ui.panel = v === 'point' ? { kind: v, reason: 'dropped' } : { kind: v }; buzz(8); render(); } else logEvent(v); },
   log: (v, b) => { let x = {}; try { x = JSON.parse(b.dataset.x || '{}'); } catch (e) {} logEvent(v, x); },
-  pset: (v, b) => { const k = b.dataset.k; ui.panel[k] = ui.panel[k] === v ? null : v; render(); },
+  pset: (v, b) => { const k = b.dataset.k; ui.panel[k] = ui.panel[k] === v && k !== 'reason' ? null : v; render(); },
   pcancel: () => { ui.panel = null; render(); },
   thrower: v => { ui.thrower = v; buzz(8); render(); },
   'switch': () => { const g = liveGame(); if (!g || calc(g).red) return; ui.tossTeam = opp(tossInfo(g).team); ui.thrower = null; buzz(8); render(); },

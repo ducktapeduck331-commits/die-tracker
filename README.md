@@ -37,6 +37,12 @@ Under **House rules** on the new-game screen the win rule can be switched to **W
 Games played before this rule existed keep the rule they were played with, so history and stats don't change.
 Stats add **Rdm** (a player's redemption tosses that scored) and **Cmbk** (a duo's wins in games where it had to redeem).
 
+### Defensive stats
+Logging a **Point** asks which defender it was on (required) and how it got down (Dropped, Two-handed catch, Trapped, Bobble; defaults to Dropped).
+- **Drops**: points scored on a player, whatever the reason. Redemption tosses count the same.
+- **Catch %**: catches / (catches + drops). Older points logged without a defender are ignored, not held against anyone.
+- The Stats tab has a **Best hands** board ranked by Catch % (5 chances to qualify) and a drops-by-reason breakdown per player.
+
 ## 1. Set up Firebase (free tier is plenty)
 
 1. Go to <https://console.firebase.google.com> and create a project (Google Analytics is not needed).
